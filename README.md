@@ -31,13 +31,19 @@ Layar utamanya berisi **digital twin 3D**, yaitu model gimbal dari Fusion yang b
 - rangka dan dudukan kamera berputar sebesar koreksi servo;
 - kamera tetap di sudut target.
 
-Di bawah model ada penjelasan dalam kalimat, misalnya *"Badan condong ke depan 5,6° dan miring ke kiri 5,5°. Servo nunduk −4,8°, servo kiri-kanan +6,4° dari tengah. Hasilnya kamera 35,8° menunduk dan 0,9° kiri-kanan."*
+- Label kecil menempel di tiap servo dan menunjukkan sudutnya.
+- Mode **Tembus** membuat bagian cetak transparan, sehingga servo, ESP32, dan MPU6050 di dalamnya terlihat.
+- Model 3D tetap terlihat saat kamu mengatur PID, kalibrasi, atau pengaturan lain.
 
-| HP | Komputer |
+Aplikasi juga jalan di **iPad**: buka lewat browser Bluefy (Safari belum mendukung Bluetooth web), lalu bisa ditambahkan ke layar utama seperti aplikasi biasa.
+
+| HP | iPad / komputer |
 |---|---|
-| ![Aplikasi di HP](gambar/aplikasi_hp.png) | ![Aplikasi di komputer](gambar/aplikasi_pc.png) |
+| ![Aplikasi di HP](gambar/aplikasi_hp.png) | ![Aplikasi di iPad](gambar/aplikasi_ipad.png) |
 
-![Layar awal](gambar/aplikasi_awal.png)
+| Layar awal | Tembus pandang + uji respons |
+|---|---|
+| ![Layar awal](gambar/aplikasi_awal.png) | ![Mode tembus pandang](gambar/aplikasi_tembus_pid.png) |
 
 - Sudut nunduk 25/30/35/40/45° atau geser 10–60°, kiri-kanan, mode Stabil / Tengah / Manual / Mati.
 - Kalibrasi otomatis: mendeteksi arah IMU, kabel servo tertukar, arah dan skala tiap servo.
