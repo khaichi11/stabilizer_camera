@@ -156,13 +156,13 @@ Text commands (Serial Monitor 115200 or the app's terminal): `HELP`, `GET`, `STA
 GitHub Actions tests every push (badge above):
 - the firmware is compiled with the Arduino CLI and the real ESP32 core;
 - the embedded app is checked against `docs/`;
-- the physics simulation runs, plus summaries for slower servos, a large dead band and gear backlash.
+- the physics simulation runs, plus summaries for slower servos, a large dead band, gear backlash and a steeper/more lopsided flight of stairs.
 
 The simulation runs the real firmware on a computer against a physics model of:
 - two servos that only read a pulse every 10–20 ms, with dead band, delay, top speed and backlash;
 - an MPU6050 with its internal filter, mounted upside down and slightly crooked, with gyro bias;
 - swapped servo cables;
-- a walking body;
+- a body walking on the flat, up stairs (the right leg lifting higher than the left), at a brisk pace, and with an uneven (limping) gait;
 - a pretend phone/iPad opening the app over WiFi.
 
 ```

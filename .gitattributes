@@ -2,4 +2,12 @@
 *.f3d binary
 *.png binary
 *.webp binary
+*.bin binary
 firmware/D435_gimbal_ESP32C3/web_files.h linguist-generated=true -diff
+
+# tools/embed_web.py gzips these byte-for-byte into web_files.h; a CRLF checkout (core.autocrlf=true on
+# Windows) would embed different bytes than the LF blob git actually stores, failing the CI embed check.
+docs/*.html text eol=lf
+docs/**/*.svg text eol=lf
+docs/*.webmanifest text eol=lf
+docs/vendor/*.js text eol=lf

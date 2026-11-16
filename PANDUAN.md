@@ -265,7 +265,7 @@ IMU menempel pada kamera, sehingga yang diukur adalah orientasi kamera itu sendi
    - **D** memakai kecepatan putar dari gyro untuk meredam guncangan.
 4. **Gerak servo yang halus.** Servo hanya membaca perintah baru pada setiap denyut. Pada 50 Hz, servo bergerak patah-patah setiap 20 ms dan menambah getaran cepat pada kamera (efek *jello* pada video RGB). Firmware memakai 100 Hz sebagai bawaan, yang masih aman untuk servo analog seperti MG90S. Model servo juga memperhitungkan zona mati servo, sehingga pengendali tidak memaksa servo bergerak bolak-balik dan servo tidak berdengung saat diam.
 
-Nilai bawaan diuji di simulasi fisik dengan pola jalan realistis: sisa guncangan kamera sekitar 0,4° RMS untuk sudut atas-bawah dan 0,2–0,3° RMS untuk sudut kanan-kiri, sedangkan tanpa gimbal guncangannya 6–10°. Pengujian yang sama juga dilakukan untuk servo yang lebih lambat, zona mati yang lebih besar, dan gigi yang longgar.
+Nilai bawaan diuji di simulasi fisik dengan pola jalan realistis: sisa guncangan kamera sekitar 0,4° RMS untuk sudut atas-bawah dan 0,2–0,3° RMS untuk sudut kanan-kiri, sedangkan tanpa gimbal guncangannya 6–10°. Pengujian yang sama juga dilakukan untuk servo yang lebih lambat, zona mati yang lebih besar, gigi yang longgar, menaiki tangga, berjalan cepat, dan berjalan pincang.
 
 Gimbal dua sumbu tidak dapat meredam putaran mendatar (*yaw*) kamera yang terjadi ketika pinggang berputar.
 

@@ -158,13 +158,13 @@ Perintah teks (Serial Monitor 115200 atau terminal di aplikasi): `HELP`, `GET`, 
 Setiap *push* diuji otomatis oleh GitHub Actions (lencana di atas):
 - firmware dikompilasi dengan Arduino CLI dan inti ESP32 asli;
 - aplikasi yang tertanam diperiksa kesamaannya dengan isi `docs/`;
-- simulasi fisik dijalankan, ditambah ringkasan untuk servo yang lebih lambat, zona mati yang besar, dan gigi yang longgar.
+- simulasi fisik dijalankan, ditambah ringkasan untuk servo yang lebih lambat, zona mati yang besar, gigi yang longgar, dan tangga yang lebih curam/lebih pincang.
 
 Simulasi menjalankan firmware asli di komputer terhadap model fisik yang meliputi:
 - dua servo yang hanya membaca denyut setiap 10–20 ms, lengkap dengan zona mati, jeda, kecepatan maksimal, dan kelonggaran gigi;
 - MPU6050 dengan filter internalnya, terpasang terbalik dan sedikit miring, dengan bias gyro;
 - kabel servo yang tertukar;
-- tubuh yang berjalan;
+- tubuh yang berjalan di jalan datar, menaiki tangga (kaki kanan terangkat lebih tinggi daripada kaki kiri), berjalan cepat, dan berjalan pincang (langkah kiri dan kanan tidak sama);
 - ponsel atau iPad tiruan yang membuka aplikasi lewat WiFi.
 
 ```

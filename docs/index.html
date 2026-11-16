@@ -261,7 +261,7 @@ body.demo .demochip{display:inline-block}
       <div class="glass tag" id="tagP">servo putar atas-bawah<b>--</b></div>
       <div class="glass tag" id="tagR">servo putar kanan-kiri<b>--</b></div>
       <div class="glass warn3d" id="chWarn" hidden></div>
-      <div class="glass walk3d" id="chWalk" hidden><i></i>Berjalan</div>
+      <div class="glass walk3d" id="chWalk" hidden><i></i><span>Berjalan</span></div>
       <div class="glass viewbtns" role="group" aria-label="Tampilan 3D">
         <button id="viewSolid" aria-pressed="true">Padat</button>
         <button id="viewXray" aria-pressed="false" title="Bagian cetak dibuat transparan sehingga komponen di dalamnya terlihat">Tembus pandang</button>
@@ -765,12 +765,21 @@ class DemoLink {
     while (n--) { for (let k = 0; k < 5; k++) this.physics(); this.control(0.005); }
   }
   body(t) {   // this.gp = steps taken (1.8 per second, each step a little early or late)
-    const W = 2 * Math.PI, cyc = t % 25, walk = clampN(Math.min((cyc - 1) / 1.5, (19 - cyc) / 1.5), 0, 1);
+    // Cycles flat ground, then (same physics as firmware/uji_simulasi/sim.cpp's "tangga" test, st: 0 flat
+    // -> 1 stairs) a flight of stairs, where the right leg lifts higher and lands harder than the left.
+    const W = 2 * Math.PI, period = 46, cyc = t % period;
+    const env = (c, a, b) => clampN(Math.min((c - a) / 1.5, (b - c) / 1.5), 0, 1);
+    const walk = Math.max(env(cyc, 1, 19), env(cyc, 23, 41)), st = env(cyc, 23, 41);
     const s2 = W * this.gp, ph = this.gp % 1, heel = ph < 0.108 ? 0.5 - 0.5 * Math.cos(W * ph / 0.108) : 0;
+    const phS = (this.gp / 2) % 1, wd = 0.084;  // stride phase: which leg is landing now
+    const bump = (c) => { const d = ((phS - c + 1.5) % 1) - 0.5; return Math.abs(d) < wd / 2 ? 0.5 + 0.5 * Math.cos(W * d / wd) : 0; };
+    const hR = bump(0), hL = bump(0.5), hSym = hR + hL, hDiff = hR - hL;
+    const pEx = 1.5 * Math.sin(s2 + 1) - 0.6 * Math.sin(2 * s2 + 0.3) + 1.2 * Math.sin(s2 / 2 + 0.4) + 0.7 * hSym + 0.5 * hDiff;
+    const rEx = 1.5 * Math.sin(s2 / 2) + 0.7 * Math.sin(s2 + 0.7) + 1.5 * Math.sin(1.5 * s2 + 0.2);
     return {
-      walk,
-      p: 5 * Math.sin(W * 0.06 * t) + walk * (2.0 * Math.sin(s2 + 1) + 0.6 * Math.sin(2 * s2 + 0.3) + 0.8 * heel),
-      r: 4 * Math.sin(W * 0.045 * t + 1) + walk * (3.5 * Math.sin(s2 / 2) + 0.8 * Math.sin(s2 + 0.7)),
+      walk, st,
+      p: 5 * Math.sin(W * 0.06 * t) + walk * (2.0 * Math.sin(s2 + 1) + 0.6 * Math.sin(2 * s2 + 0.3) + 0.8 * heel) + walk * st * pEx,
+      r: 4 * Math.sin(W * 0.045 * t + 1) + walk * (3.5 * Math.sin(s2 / 2) + 0.8 * Math.sin(s2 + 0.7)) + walk * st * rEx,
       // what walking leaves in the firmware's angle estimate (measured in the physics test: ~0.2 deg)
       eP: walk * 0.18 * Math.sin(W * 1.8 * t + 2.0), eR: walk * 0.2 * Math.sin(W * 0.9 * t + 1.2),
     };
@@ -1111,6 +1120,7 @@ function explain(d) {
   else if (d.mode === 1) w = "Mode Tengah: servo diam.";
   $("#chWarn").textContent = w; $("#chWarn").hidden = !w;
   $("#chWalk").hidden = !!w || !(d.flags & 128);
+  $("#chWalk span").textContent = S.kind === "demo" && S.link && S.link.b && S.link.b.st > 0.5 ? "Naik tangga" : "Berjalan";
 }
 function fitCanvas(cv) {
   const r = cv.getBoundingClientRect(), dpr = Math.min(3, window.devicePixelRatio || 1);

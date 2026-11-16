@@ -512,6 +512,11 @@ int main() {
     static Wobble wb;
     wb.step();
     double st = std::min(1.0, std::max(0.0, t - (32.0 + WARM)));  // 0 = flat, 1 = stairs
+    // STAIR_LIFT scales how much bigger the stride's motion is on stairs than on flat ground (a taller
+    // step or a steeper flight); STAIR_ASYM scales the right leg's bigger lift over the left's that is
+    // already there (a limp, or a spiral stairway). Both default to 1.0, reproducing the numbers below
+    // exactly (pF/rF = flat, pF+pEx/rF+rEx = full stairs at st=1).
+    double lift = envd("STAIR_LIFT", 1.0), asym = envd("STAIR_ASYM", 1.0);
     double cyc = gg.step(t, 2 * (0.9 - 0.2 * st)) / 2;             // strides
     double th = 2 * M_PI * cyc, ph = fmod(cyc, 1.0);
     auto bump = [&](double c, double wd) {  // raised-cosine bump at stride phase c, wd wide (phase units)
@@ -519,18 +524,59 @@ int main() {
       return fabs(d) < wd / 2 ? 0.5 + 0.5 * cos(2 * M_PI * d / wd) : 0.0;
     };
     double wd = 0.06 * 2 * (0.9 - 0.2 * st);  // 60 ms
-    double hR = bump(0.0, wd), hL = bump(0.5, wd);
+    double hR = bump(0.0, wd), hL = bump(0.5, wd), hSym = hR + hL, hDiff = hR - hL;
     double ramp = std::min(1.0, std::max(0.0, (t - 30.0) / 2.0));
-    double pF = 2.0 * sin(2 * th + 1.0) + 0.6 * sin(4 * th + 0.3) + 0.8 * (hR + hL);
-    double pS = 3.5 * sin(2 * th + 1.0) + 1.2 * sin(th + 0.4) + 2.0 * hR + 1.0 * hL;
+    double pF = 2.0 * sin(2 * th + 1.0) + 0.6 * sin(4 * th + 0.3) + 0.8 * hSym;
+    double pEx = 1.5 * sin(2 * th + 1.0) - 0.6 * sin(4 * th + 0.3) + 1.2 * sin(th + 0.4) + 0.7 * hSym + 0.5 * asym * hDiff;
     double rF = 3.5 * sin(th) + 0.8 * sin(2 * th + 0.7);
-    double rS = 5.0 * sin(th) + 1.5 * sin(2 * th + 0.7) + 1.5 * sin(3 * th + 0.2);
-    w.leanS = 10 * ramp + (1 - st) * rF + st * rS + wb.s;
-    w.leanF = 8 * ramp + (1 - st) * pF + st * pS + wb.f;
+    double rEx = 1.5 * sin(th) + 0.7 * sin(2 * th + 0.7) + 1.5 * sin(3 * th + 0.2);
+    w.leanS = 10 * ramp + rF + st * lift * rEx + wb.s;
+    w.leanF = 8 * ramp + pF + st * lift * pEx + wb.f;
     w.yaw = 5 * sin(th);
-    w.accLin[2] = (0.22 + 0.13 * st) * sin(2 * th) + (0.5 + 0.1 * st) * hR + (0.5 - 0.1 * st) * hL;
+    w.accLin[2] = (0.22 + 0.13 * st * lift) * sin(2 * th) + 0.5 * hSym + 0.1 * st * asym * hDiff;
     w.accLin[1] = 0.15 * sin(2 * th + 0.4);
     w.accLin[0] = 0.08 * sin(th + 0.2);
+  };
+  // A flat-ground limp: same stride rate and sway as ordinary walking (jalan's rF/pF non-heel terms), but
+  // the heel strike lands harder on the right leg than the left every stride, instead of the same on both
+  // (jalan's single, leg-blind heel bump). Favouring a sore leg, odd footwear, or an uneven belt mount.
+  auto pincang = [](double t, World &w) {
+    static Gaitgen gg;
+    static Wobble wb;
+    wb.step();
+    static const double f2 = 1.8;  // strides/second, like ordinary walking
+    double cyc = gg.step(t, f2) / 2, th = 2 * M_PI * cyc, ph = fmod(cyc, 1.0);  // strides: left and right differ
+    auto bump = [&](double c, double wd) {
+      double d = fmod(ph - c + 1.5, 1.0) - 0.5;
+      return fabs(d) < wd / 2 ? 0.5 + 0.5 * cos(2 * M_PI * d / wd) : 0.0;
+    };
+    double wd = 0.06 * f2, hR = bump(0.0, wd), hL = bump(0.5, wd);
+    double ramp = std::min(1.0, std::max(0.0, (t - 30.0) / 2.0));
+    w.leanS = 10 * ramp + 3.5 * sin(th) + 0.8 * sin(2 * th + 0.7) + wb.s;
+    w.leanF = 8 * ramp + 2.0 * sin(2 * th + 1.0) + 0.6 * sin(4 * th + 0.3) + 2.2 * hR + 0.4 * hL + wb.f;
+    w.yaw = 5 * sin(th);
+    w.accLin[2] = 0.22 * sin(2 * th) + 0.75 * hR + 0.25 * hL;
+    w.accLin[1] = 0.15 * sin(th + 0.4);
+    w.accLin[0] = 0.08 * sin(th / 2 + 0.2);
+  };
+  // Brisk/jog pace, promoted from a CI "summary only" sweep (WALK_F=2.8 WALK_AMP=2.5 HEEL=3, still in
+  // firmware.yml) to a real, gated scenario: a faster stride, a bigger sway and a harder heel strike than
+  // ordinary walking.
+  auto cepat = [](double t, World &w) {
+    static Gaitgen gg;
+    static Wobble wb;
+    wb.step();
+    static const double f2 = 2.8, amp = 2.5, hs = 3.0;
+    double cyc = gg.step(t, f2), th2 = 2 * M_PI * cyc, th1 = th2 / 2;
+    double ramp = std::min(1.0, std::max(0.0, (t - 30.0) / 2.0));
+    double ph = fmod(cyc, 1.0), wd = 0.06 * f2;
+    double heel = ph < wd ? 0.5 - 0.5 * cos(2 * M_PI * ph / wd) : 0;
+    w.leanS = 10 * ramp + amp * (3.5 * sin(th1) + 0.8 * sin(th2 + 0.7)) + wb.s;
+    w.leanF = 8 * ramp + amp * (2.0 * sin(th2 + 1.0) + 0.6 * sin(2 * th2 + 0.3)) + hs * 0.8 * heel + wb.f;
+    w.yaw = 5 * sin(th1);
+    w.accLin[2] = amp * (0.22 * sin(th2) + 0.08 * sin(2 * th2)) + hs * 0.5 * heel;
+    w.accLin[1] = amp * 0.15 * sin(th2 + 0.4);
+    w.accLin[0] = amp * 0.08 * sin(th1 + 0.2);
   };
   struct WalkRes { Stat sp, sr, cp, cr, ep, er, vp, vr, vcp, vcr; std::vector<double> jp, jr, jcp, jcr; double stride = 0, sway = 0; };
   // jolt: how far the camera jumps within 30 ms, 99th percentile (what a viewer sees as a jerk)
@@ -617,6 +663,8 @@ int main() {
   WalkRes wg = walkTest("goyang", goyang);
   WalkRes wj = walkTest("jalan", jalan);
   WalkRes wt = walkTest("tangga", tangga);
+  WalkRes wp = walkTest("pincang", pincang);
+  WalkRes wc = walkTest("cepat", cepat);
   Stat sp = wj.sp, sr = wj.sr;
   check(wg.sp.rms() < wg.cp.rms() * 0.5 && wg.sr.rms() < wg.cr.rms() * 0.5, "goyang: stabilisation removes more than half the motion");
   check(wj.sp.rms() < wj.cp.rms() * 0.5 && wj.sr.rms() < wj.cr.rms() * 0.5, "jalan: stabilisation removes more than half the motion");
@@ -627,6 +675,13 @@ int main() {
   check(p99(wj.jp) < 0.85 * p99(wj.jcp), "jalan: atas-bawah jolt at each step below 85% of no gimbal");
   check(wt.sp.rms() < 0.8 && wt.sr.rms() < 0.8, "tangga: camera within 0.8 deg rms on stairs with uneven left/right steps");
   check(p99(wt.jp) < 0.6 * p99(wt.jcp) && p99(wt.jr) < 0.6 * p99(wt.jcr), "tangga: jolts less than 60% of no gimbal");
+  check(wp.sp.rms() < wp.cp.rms() * 0.5 && wp.sr.rms() < wp.cr.rms() * 0.5, "pincang: stabilisation removes more than half the motion");
+  check(wp.sp.rms() < 0.8 && wp.sr.rms() < 0.8, "pincang: camera within 0.8 deg rms despite the left/right limp");
+  check(p99(wp.jp) < 0.6 * p99(wp.jcp) && p99(wp.jr) < 0.6 * p99(wp.jcr), "pincang: jolts less than 60% of no gimbal");
+  check(wc.sp.rms() < wc.cp.rms() * 0.5 && wc.sr.rms() < wc.cr.rms() * 0.5, "cepat: stabilisation removes more than half the motion");
+  check(wc.sp.rms() < 1.2 && wc.sr.rms() < 0.7, "cepat: camera within 1.2/0.7 deg rms (atas-bawah/kanan-kiri) at a brisk pace");
+  check(p99(wc.jr) < 0.6 * p99(wc.jcr), "cepat: kanan-kiri jolts less than 60% of no gimbal");
+  check(p99(wc.jp) < 0.85 * p99(wc.jcp), "cepat: atas-bawah jolt at each step below 85% of no gimbal");
   // the same walk without the learned step pattern: the pattern must make the step jolt clearly smaller
   if (cfg.gait > 0) {
     float g0 = cfg.gait;
@@ -643,7 +698,9 @@ int main() {
   W.body = nullptr;
   W.leanF = W.leanS = W.yaw = 0;
   W.accLin[0] = W.accLin[1] = W.accLin[2] = 0;
-  run(4.0);
+  // 8 s, not 4: cepat is brisker than the older three walks, and the PID integrator needs a little longer
+  // to settle to its resting value before we check that the dead band compensation has stopped hunting.
+  run(8.0);
   takeUsb();
 
   double jitP = 0, jitR = 0;

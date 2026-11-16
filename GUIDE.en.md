@@ -264,7 +264,7 @@ The IMU is attached to the camera, so it measures the camera itself. The MG90S s
    - **D** uses the gyro's turn rate to damp shake.
 4. **Smooth servo motion.** A servo only takes a new command with each pulse. At 50 Hz it moves in 20 ms stairs and adds fast shake to the camera (jello in the RGB video). The firmware uses 100 Hz by default, still safe for analog servos like the MG90S. The servo model also knows the servo's dead band, so the controller never pushes a servo back and forth and the servos stay quiet at rest.
 
-The defaults were tested in the physics simulation with realistic walking: about 0.4° RMS of pitch error and 0.2–0.3° RMS of roll error remain, against 6–10° without the gimbal. The same tests also run with slower servos, a larger dead band and gear backlash.
+The defaults were tested in the physics simulation with realistic walking: about 0.4° RMS of pitch error and 0.2–0.3° RMS of roll error remain, against 6–10° without the gimbal. The same tests also run with slower servos, a larger dead band, gear backlash, climbing stairs, a brisk pace and a limping gait.
 
 A 2-axis gimbal cannot cancel the camera turning left and right (yaw) when your hips rotate.
 
