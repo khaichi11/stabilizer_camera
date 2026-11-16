@@ -555,9 +555,11 @@ try {
     return d;
   }
   if (camCenter) {
-    const right = new THREE.Vector3(1, 0, 0), fwd = rollAxis.clone(), up = new THREE.Vector3().crossVectors(right, fwd).negate();
+    // camera axes as in the Fusion model: right = +x, lens looks along the roll axis (35 deg down, forward),
+    // top = right x lens. right, top, back form a right-handed set, so the D435 is turned, never mirrored.
+    const right = new THREE.Vector3(1, 0, 0), fwd = rollAxis.clone(), up = new THREE.Vector3().crossVectors(right, fwd).normalize();
     const back = fwd.clone().negate(), cam3 = buildD435();
-    cam3.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up.normalize(), back));
+    cam3.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, back));
     cam3.position.copy(camCenter); rollG.add(cam3);
   }
   function setXray(on) {
