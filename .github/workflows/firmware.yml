@@ -1,0 +1,45 @@
+name: Firmware
+
+on:
+  push:
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware.yml"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  compile:
+    name: Compile ESP32-C3 (Arduino CLI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - name: Install ESP32 core
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+          arduino-cli core list
+      - name: Compile (Huge APP partition, USB CDC on boot)
+        run: >
+          arduino-cli compile
+          --fqbn "esp32:esp32:esp32c3:CDCOnBoot=cdc,PartitionScheme=huge_app"
+          --warnings all
+          firmware/D435_gimbal_ESP32C3
+      - name: Does it also fit the default partition?
+        continue-on-error: true
+        run: arduino-cli compile --fqbn "esp32:esp32:esp32c3:CDCOnBoot=cdc" firmware/D435_gimbal_ESP32C3
+
+  simulate:
+    name: Physics simulation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run
+        working-directory: firmware/uji_simulasi
+        run: |
+          g++ -std=gnu++17 -O2 -Wall -Wextra -Wno-unused-parameter -I mock -include array sim.cpp -o sim
+          ./sim
+          BACKLASH=0.6 QUICK=1 ./sim | grep SUMMARY
