@@ -1,0 +1,41 @@
+BUILD
+  A_Cradle tunnel exits: 32 edges R1.5
+  A_HingeBolt: modeled thread M6x1, print clearance 0.15 mm on 3 faces
+  A_HingeNut: modeled thread M6x1, print clearance 0.15 mm on 3 faces
+  A_ThumbScrew: modeled thread 1/4-20 UNC, print clearance 0.15 mm on 3 faces
+  B_Cradle tunnel exits: 32 edges R1.5
+  B_ThumbScrew: modeled thread 1/4-20 UNC, print clearance 0.15 mm on 3 faces
+CHECKS (camera frame, assembled; values = overlap volume)
+  A cradle vs camera                          : CLEAR
+  A lid vs camera (bumps = intended preload)  : 24.0 mm3
+  A lid vs cradle                             : CLEAR
+  hinge bolt vs cradle                        : CLEAR
+  hinge bolt vs lid                           : CLEAR
+  hinge nut vs cradle                         : CLEAR
+  hinge nut vs lid                            : CLEAR
+  hinge bolt vs nut (thread fit)              : CLEAR
+  A thumbscrew vs cradle                      : CLEAR
+  B thumbscrew vs cradle                      : CLEAR
+  knob + finger space vs A cradle             : CLEAR
+  knob + finger space vs B cradle             : CLEAR
+  A cradle vs fov_depth                       : CLEAR
+  A lid vs fov_depth                          : CLEAR
+  B cradle vs fov_depth                       : CLEAR
+  A cradle vs fov_rgb                         : CLEAR
+  A lid vs fov_rgb                            : CLEAR
+  B cradle vs fov_rgb                         : CLEAR
+  knob (+finger room) back edge 5.3 mm in front of the belt plate; camera back 32.6 mm from plate
+  lid opened  60 deg: vs cradle CLEAR, vs bolt CLEAR, vs nut CLEAR
+  lid opened 100 deg: vs cradle CLEAR, vs bolt CLEAR, vs nut CLEAR
+  A_ThumbScrew 42.6 mm long, B_ThumbScrew 42.6 mm long
+  screw boss: diameter 23.8 mm, flat face square to the screw; knob 5.8 mm below it
+PRINT LAYOUT (each part its own component, print orientation, on Z = 0) -> C:\Users\khair\D435_mount_STL\print_ready
+  PRINT_A_Cradle       77.9 x  76.3 mm footprint, 120.0 mm high
+  PRINT_B_Cradle       72.9 x  75.8 mm footprint, 120.0 mm high
+  PRINT_A_Lid         106.9 x  35.2 mm footprint,  19.2 mm high
+  PRINT_A_HingeBolt    11.5 x  10.0 mm footprint, 109.4 mm high
+  PRINT_A_HingeNut     11.5 x  10.0 mm footprint,   5.0 mm high
+  PRINT_A_ThumbScrew   22.0 x  22.0 mm footprint,  42.6 mm high
+  PRINT_B_ThumbScrew   22.0 x  22.0 mm footprint,  42.6 mm high
+  plate area used: 161 x 154 mm (centred on the origin)
+  f3d saved

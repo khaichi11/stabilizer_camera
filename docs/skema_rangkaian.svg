@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 680" font-family="Barlow, Segoe UI, Roboto, Arial, sans-serif" role="img" aria-label="Skema rangkaian gimbal D435: ESP32-C3 Super Mini, dua servo MG90S, MPU6050, kapasitor, power bank">
+  <title>Skema rangkaian gimbal D435</title>
+  <style>
+    .w{fill:none;stroke-width:4;stroke-linecap:round;stroke-linejoin:round}
+    .halo{fill:none;stroke:#fff;stroke-width:11;stroke-linecap:round;stroke-linejoin:round}
+    .red{stroke:#D23B2B}.brn{stroke:#4A3426}.org{stroke:#EE8A1E}.pur{stroke:#7E57C2}.blu{stroke:#2E7DBA}.grn{stroke:#2E9C6E}.usb{stroke:#7D8A92;stroke-width:7}
+    .box{fill:#F8FAF7;stroke:#1F2C38;stroke-width:1.6}
+    .t{fill:#1F2C38;font-size:15px}
+    .tb{fill:#1F2C38;font-size:16px;font-weight:600}
+    .ts{fill:#5B6A75;font-size:13px}
+    .pin{fill:#fff;font-size:13px;font-weight:600}
+    .pinoff{fill:#8EA0B3;font-size:13px}
+    .j{fill:#1F2C38}
+  </style>
+  <rect width="920" height="680" fill="#fff"/>
+
+  <!-- power bank + USB cable -->
+  <rect class="box" x="40" y="34" width="190" height="78" rx="10"/>
+  <text class="tb" x="58" y="64">Power bank</text>
+  <text class="ts" x="58" y="86">5 V, minimal 2 A</text>
+  <rect x="212" y="62" width="22" height="22" rx="3" fill="#1F2C38"/>
+  <path class="w usb" d="M234 73 H480 V138"/>
+  <text class="ts" x="262" y="62">kabel USB-A ke USB-C (listrik + upload firmware)</text>
+
+  <!-- ESP32-C3 Super Mini -->
+  <rect x="380" y="150" width="200" height="330" rx="8" fill="#23395B" stroke="#1F2C38" stroke-width="1.6"/>
+  <rect x="458" y="134" width="44" height="22" rx="6" fill="#B8C2C9" stroke="#1F2C38" stroke-width="1.4"/>
+  <text x="480" y="432" text-anchor="middle" fill="#fff" font-size="16" font-weight="600">ESP32-C3</text>
+  <text x="480" y="452" text-anchor="middle" fill="#C9D3DD" font-size="13">Super Mini</text>
+  <rect x="452" y="330" width="56" height="56" rx="4" fill="#3A5277"/>
+  <circle cx="540" cy="186" r="5" fill="#5BA7E6"/><text x="526" y="190" fill="#C9D3DD" font-size="11" text-anchor="end">LED</text>
+  <g>
+    <circle cx="380" cy="190" r="6" fill="#E4B95B"/><text class="pin" x="394" y="195">5V</text>
+    <circle cx="380" cy="226" r="6" fill="#E4B95B"/><text class="pin" x="394" y="231">G</text>
+    <circle cx="380" cy="262" r="6" fill="#E4B95B"/><text class="pin" x="394" y="267">3V3</text>
+    <circle cx="380" cy="298" r="6" fill="#E4B95B"/><text class="pin" x="394" y="303">4</text>
+    <circle cx="380" cy="334" r="6" fill="#E4B95B"/><text class="pin" x="394" y="339">3</text>
+    <circle cx="380" cy="370" r="5" fill="#6E7F92"/><text class="pinoff" x="394" y="375">2</text>
+    <circle cx="380" cy="406" r="5" fill="#6E7F92"/><text class="pinoff" x="394" y="411">1</text>
+    <circle cx="380" cy="442" r="5" fill="#6E7F92"/><text class="pinoff" x="394" y="447">0</text>
+  </g>
+  <g text-anchor="end">
+    <circle cx="580" cy="190" r="5" fill="#6E7F92"/><text class="pinoff" x="566" y="195">5</text>
+    <circle cx="580" cy="226" r="6" fill="#E4B95B"/><text class="pin" x="566" y="231">6</text>
+    <circle cx="580" cy="262" r="6" fill="#E4B95B"/><text class="pin" x="566" y="267">7</text>
+    <circle cx="580" cy="298" r="5" fill="#6E7F92"/><text class="pinoff" x="566" y="303">8</text>
+    <circle cx="580" cy="334" r="5" fill="#6E7F92"/><text class="pinoff" x="566" y="339">9</text>
+    <circle cx="580" cy="370" r="5" fill="#6E7F92"/><text class="pinoff" x="566" y="375">10</text>
+    <circle cx="580" cy="406" r="5" fill="#6E7F92"/><text class="pinoff" x="566" y="411">20</text>
+    <circle cx="580" cy="442" r="5" fill="#6E7F92"/><text class="pinoff" x="566" y="447">21</text>
+  </g>
+
+  <!-- buses: 5V (x=300) and GND (x=250) -->
+  <path class="w red" d="M374 190 H300 V520"/>
+  <path class="w brn" d="M374 226 H250 V628 H676 V300 H730 V336"/>
+
+  <!-- 3V3 to IMU VCC (drawn first: servo wires pass over it) -->
+  <path class="halo" d="M374 262 H364 V616 H688 V312 H708 V336"/><path class="w pur" d="M374 262 H364 V616 H688 V312 H708 V336"/>
+
+  <!-- roll servo -->
+  <rect class="box" x="40" y="246" width="150" height="82" rx="8"/>
+  <text class="tb" x="54" y="272">Servo kiri-kanan</text>
+  <text class="ts" x="54" y="292">MG90S, di belakang</text>
+  <text class="ts" x="54" y="309">kamera</text>
+  <path class="w brn" d="M190 262 H250"/><circle class="j" cx="250" cy="262" r="5"/>
+  <path class="halo" d="M190 286 H300"/><path class="w red" d="M190 286 H300"/><circle class="j" cx="300" cy="286" r="5"/>
+  <path class="halo" d="M190 310 H340 V298 H374"/><path class="w org" d="M190 310 H340 V298 H374"/>
+
+  <!-- pitch servo -->
+  <rect class="box" x="40" y="380" width="150" height="82" rx="8"/>
+  <text class="tb" x="54" y="406">Servo nunduk</text>
+  <text class="ts" x="54" y="426">MG90S, di G_Base</text>
+  <path class="w brn" d="M190 396 H250"/><circle class="j" cx="250" cy="396" r="5"/>
+  <path class="halo" d="M190 420 H300"/><path class="w red" d="M190 420 H300"/><circle class="j" cx="300" cy="420" r="5"/>
+  <path class="halo" d="M190 444 H352 V334 H374"/><path class="w org" d="M190 444 H352 V334 H374"/>
+
+  <!-- capacitor between 5V and GND -->
+  <path class="w red" d="M300 520 H200 V546"/>
+  <path class="w brn" d="M250 600 H200 V576"/><circle class="j" cx="250" cy="600" r="5"/>
+  <line x1="178" y1="548" x2="222" y2="548" stroke="#1F2C38" stroke-width="4"/>
+  <path d="M178 576 Q200 564 222 576" fill="none" stroke="#1F2C38" stroke-width="4"/>
+  <text class="t" x="232" y="546" font-weight="600">+</text>
+  <text class="tb" x="40" y="540">Kapasitor elco</text>
+  <text class="ts" x="40" y="558">100–470 µF</text>
+  <text class="ts" x="40" y="575">Ø ≤ 6,3 × 11 mm</text>
+  <text class="ts" x="40" y="592">kaki panjang = +</text>
+
+  <!-- I2C -->
+  <path class="halo" d="M586 262 H752 V336"/><path class="w grn" d="M586 262 H752 V336"/>
+  <path class="halo" d="M586 226 H774 V336"/><path class="w blu" d="M586 226 H774 V336"/>
+
+  <!-- MPU6050, header along the top edge -->
+  <rect x="690" y="336" width="196" height="160" rx="8" fill="#2B5F9E" stroke="#1F2C38" stroke-width="1.6"/>
+  <g fill="#E4B95B"><circle cx="708" cy="344" r="5"/><circle cx="730" cy="344" r="5"/><circle cx="752" cy="344" r="5"/><circle cx="774" cy="344" r="5"/></g>
+  <g fill="#6E7F92"><circle cx="796" cy="344" r="4"/><circle cx="818" cy="344" r="4"/><circle cx="840" cy="344" r="4"/><circle cx="862" cy="344" r="4"/></g>
+  <g fill="#fff" font-size="11" font-weight="600" text-anchor="middle">
+    <text x="708" y="366">VCC</text><text x="730" y="380">GND</text><text x="752" y="366">SCL</text><text x="774" y="380">SDA</text>
+  </g>
+  <g fill="#B9CCE3" font-size="10" text-anchor="middle"><text x="796" y="366">XDA</text><text x="818" y="380">XCL</text><text x="840" y="366">AD0</text><text x="862" y="380">INT</text></g>
+  <rect x="770" y="400" width="50" height="50" rx="3" fill="#18324F"/>
+  <text x="788" y="478" text-anchor="middle" fill="#fff" font-size="15" font-weight="600">MPU6050 (GY-521)</text>
+  <text x="788" y="516" text-anchor="middle" class="ts">di bawah dudukan kamera</text>
+
+  <!-- legend -->
+  <g transform="translate(640 112)">
+    <text class="tb" x="0" y="0">Warna kabel</text>
+    <line x1="0" y1="18" x2="26" y2="18" class="w red"/><text class="t" x="34" y="23">5V</text>
+    <line x1="0" y1="40" x2="26" y2="40" class="w brn"/><text class="t" x="34" y="45">GND</text>
+    <line x1="0" y1="62" x2="26" y2="62" class="w org"/><text class="t" x="34" y="67">sinyal servo</text>
+    <line x1="140" y1="18" x2="166" y2="18" class="w pur"/><text class="t" x="174" y="23">3,3 V</text>
+    <line x1="140" y1="40" x2="166" y2="40" class="w blu"/><text class="t" x="174" y="45">SDA</text>
+    <line x1="140" y1="62" x2="166" y2="62" class="w grn"/><text class="t" x="174" y="67">SCL</text>
+  </g>
+  <text class="ts" x="40" y="664">Titik hitam = kabel disambung (solder). Garis yang hanya bersilangan tidak tersambung. Pin abu-abu tidak dipakai.</text>
+</svg>

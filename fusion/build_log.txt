@@ -1,0 +1,94 @@
+BUILD ok (1.2 s); volumes: G_Base 77.8 cm3, G_PitchFrame 11.2 cm3, G_CamTray 12.3 cm3, G_ThumbScrew 1.4 cm3, G_ClampScrew 1.0 cm3, G_ClampJaw 0.2 cm3, G_CableScrew 0.5 cm3, G_PivotCap 1.4 cm3, G_ImuLid 0.4 cm3, G_BeltScrew 0.5 cm3, G_BeltPad 0.2 cm3, G_Nut_M6 0.3 cm3, G_EspCover 2.8 cm3, G_UsbGate 0.2 cm3
+FITS (parts in place, nominal):
+  base vs pitch servo                           : CLEAR
+  pitch frame vs roll servo                     : CLEAR
+  pitch frame vs pitch horn                     : CLEAR
+  tray vs roll horn                             : CLEAR
+  tray vs camera                                : CLEAR
+  tray vs thumbscrew                            : CLEAR
+  camera vs thumbscrew (thread in tripod hole)  : CLEAR
+  tray vs IMU board                             : CLEAR
+  roll servo vs tray                            : CLEAR
+  roll servo vs camera                          : CLEAR
+  pitch frame vs tray                           : CLEAR
+  pitch frame vs camera                         : CLEAR
+  tray vs clamp screw                           : CLEAR
+  tray vs clamp nut                             : CLEAR
+  camera vs clamp screw                         : CLEAR
+  tray vs clamp jaw                             : CLEAR
+  camera vs clamp jaw (0.2 mm before tightening): CLEAR
+  clamp screw vs clamp jaw                      : CLEAR
+  USB-C plug vs tray (right end stop)           : CLEAR
+  base vs ESP32-C3 board                        : CLEAR
+  base vs capacitor 470uF (6.3 x 11)            : CLEAR
+  ESP32 vs capacitor                            : CLEAR
+  base vs power plug head (7 x 12)              : CLEAR
+  ESP32 vs power plug head                      : CLEAR
+  plug-lock screw vs plug head (0.2 before tightening): CLEAR
+  base vs ESP front cover + hood                : CLEAR
+  ESP32 vs front cover                          : CLEAR
+  capacitor vs front cover                      : CLEAR
+  front cover vs wedge gate                     : CLEAR
+  base vs wedge gate                            : CLEAR
+  base vs pivot cap (dovetail)                  : CLEAR
+  pivot cap vs ESP cover hood                   : CLEAR
+  tray vs IMU lid                               : CLEAR
+  IMU board vs lid                              : CLEAR
+  IMU board vs tray (pegs in the M3 holes)      : CLEAR
+  base vs belt pad R (in its recess)            : CLEAR
+  base vs belt pad L                            : CLEAR
+  belt screw R vs pad                           : CLEAR
+  belt screw L vs pad                           : CLEAR
+  belt screw R thread in the base (intended)    : 50.3 mm3
+  belt screw L thread in the base (intended)    : 49.7 mm3
+  belt screw R knob vs ESP cover hood           : CLEAR
+  belt screw R knob vs pivot cap                : CLEAR
+  ASSEMBLY: ESP cover slid down 3..30 mm vs wires from the pivot: CLEAR
+  ASSEMBLY: pivot cap slid in 1..6 mm vs base   : CLEAR
+  ASSEMBLY: pivot cap slid in 1..6 mm vs wires  : CLEAR
+  ASSEMBLY: pitch frame lowered from above (3.5 mm right) vs base: CLEAR
+  ASSEMBLY: same vs pitch servo                 : CLEAR
+  plug-lock screw thread in the base (overlap = thread, intended): 39.4 mm3
+  right cable tie in its channel vs ESP32       : CLEAR
+  right cable tie vs plug head                  : CLEAR
+  right cable tie vs base (channel must be free): CLEAR
+MOTION (pitch (10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0) deg, roll (-25.0, -12.5, 0.0, 12.5, 25.0) deg):
+  all pairs CLEAR at every pose, depth FOV (87x58 deg) clear at every pose
+CABLE PATHS (nominal pose, every part):
+  Kabel servo nunduk                      : CLEAR
+  Kabel servo kiri-kanan                  : CLEAR
+  Kabel IMU                               : CLEAR
+  Kabel USB kamera                        : CLEAR
+  Kabel power (power bank)                : CLEAR
+SIZE: front of camera 63.9 mm in front of the plate face (76.9 mm from the body); base 127 x 54 mm; lowest point Z -39 (plate bottom -27)
+SIZE: unit height Z -39 .. 27 mm
+CLEARANCES (design values, mm): camera back 0.3 | jaw 0.2 before tightening | right stop 0.2, only 2.5 high | front of camera free | tripod slot +-2.0 front/back, +-0.3 sideways | thumbscrew 4.5 into the camera thread | servo pocket 13.0 x 23.4 for MG90S max 12.4 x 22.8 | IMU pocket 22.0 x 17.0 for GY-521 ~21 x 16 | ESP32 box 18.5 x 25.3 for 18 x 22.5, plug opening 14 x 8, box front 7 mm in front of the plate
+CHECK TIME 19.0 s
+PRINT LAYOUT (each part its own component, print orientation, on Z = 0) -> C:\Users\khair\D435_mount_STL\gimbal\print_ready
+PRINT LIST = ASSEMBLY: 16 pieces, 16 STL files (G_Base x1, G_BeltPad x2, G_BeltScrew x2, G_CableScrew x1, G_CamTray x1, G_ClampJaw x1, G_ClampScrew x1, G_EspCover x1, G_ImuLid x1, G_Nut_M6 x1, G_PitchFrame x1, G_PivotCap x1, G_ThumbScrew x1, G_UsbGate x1)
+  G_Base: modeled thread M6x1 on 3 face(s), print clearance 0.15 mm
+  PRINT_G_Base          127.0 x  59.5 mm footprint,  54.1 mm high
+  PRINT_G_PitchFrame     35.0 x  23.0 mm footprint,  58.4 mm high
+  G_ClampScrew: modeled thread M6x1 on 1 face(s), print clearance 0.15 mm
+  PRINT_G_ClampScrew     13.8 x  13.8 mm footprint,  19.3 mm high
+  G_ThumbScrew: modeled thread 1/4-20 UNC on 1 face(s), print clearance 0.15 mm
+  PRINT_G_ThumbScrew     17.8 x  17.8 mm footprint,  14.0 mm high
+  PRINT_G_CamTray       113.9 x  33.5 mm footprint,  28.3 mm high
+  PRINT_G_ImuLid         23.8 x  16.4 mm footprint,   1.3 mm high
+  PRINT_G_EspCover       27.0 x  27.9 mm footprint,  21.3 mm high
+  PRINT_G_PivotCap       13.8 x  33.0 mm footprint,   6.4 mm high
+  G_BeltScrew_1: modeled thread M6x1 on 1 face(s), print clearance 0.15 mm
+  PRINT_G_BeltScrew_1     8.8 x   9.0 mm footprint,  14.2 mm high
+  G_BeltScrew_2: modeled thread M6x1 on 1 face(s), print clearance 0.15 mm
+  PRINT_G_BeltScrew_2     8.8 x   9.0 mm footprint,  14.2 mm high
+  PRINT_G_BeltPad_1      12.8 x  14.2 mm footprint,   1.3 mm high
+  PRINT_G_BeltPad_2      12.8 x  14.2 mm footprint,   1.3 mm high
+  G_Nut_M6: modeled thread M6x1 on 1 face(s), print clearance 0.15 mm
+  PRINT_G_Nut_M6         11.5 x  10.0 mm footprint,   4.8 mm high
+  PRINT_G_ClampJaw        8.4 x  11.0 mm footprint,   3.8 mm high
+  G_CableScrew: modeled thread M6x1 on 1 face(s), print clearance 0.15 mm
+  PRINT_G_CableScrew     12.0 x  11.8 mm footprint,   9.6 mm high
+  PRINT_G_UsbGate         7.0 x  14.2 mm footprint,   4.4 mm high
+  build plate area used: 218 x 164 mm (centred on the origin)
+f3d saved: C:\Users\khair\D435_mount_STL\gimbal\D435_gimbal.f3d
+DONE
