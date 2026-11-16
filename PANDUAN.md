@@ -207,7 +207,7 @@ Skema yang sama ada di aplikasi, menu **Rangkaian**.
 - Boards Manager: **esp32 by Espressif Systems** versi 3.x.
 - Tools → Board: **ESP32C3 Dev Module**.
 - Tools → USB CDC On Boot: **Enabled**.
-- Tools → Partition Scheme: **Huge APP (3MB No OTA/1MB SPIFFS)**. Bluetooth butuh ruang lebih besar dari pilihan bawaan.
+- Partition Scheme bawaan sudah cukup (firmware ±711 KB).
 - Tidak perlu library tambahan.
 
 **Aplikasi pengatur** (`docs/index.html`, dibuka di browser):

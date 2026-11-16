@@ -1,5 +1,7 @@
 # Stabilizer Camera: gimbal sabuk 2 sumbu untuk Intel RealSense D435
 
+[![Firmware](https://github.com/khaichi11/stabilizer_camera/actions/workflows/firmware.yml/badge.svg)](https://github.com/khaichi11/stabilizer_camera/actions/workflows/firmware.yml)
+
 Gimbal servo 2 sumbu (nunduk + kiri-kanan) yang dipakai di sabuk, untuk kamera Intel RealSense D435. Kamera dijaga menunduk sekitar 35° dan datar kiri-kanan saat berjalan. Semua bagian dicetak 3D tanpa support, baut dan mur besar ikut dicetak. Kendalinya ESP32-C3 Super Mini + MPU6050, dan semua pengaturannya lewat aplikasi web via Bluetooth (bersandi) atau kabel USB.
 
 | | |
@@ -24,9 +26,18 @@ Gimbal servo 2 sumbu (nunduk + kiri-kanan) yang dipakai di sabuk, untuk kamera I
 
 Buka **https://khaichi11.github.io/stabilizer_camera/** di Chrome atau Edge (Android, Windows, macOS, Linux). Di iPhone pakai browser Bluefy. Ada mode demo untuk mencoba tanpa alat.
 
+Layar utamanya berisi **digital twin 3D**, yaitu model gimbal dari Fusion yang bergerak langsung mengikuti data sensor:
+- badan dan klip sabuk ikut miring seperti badanmu;
+- rangka dan dudukan kamera berputar sebesar koreksi servo;
+- kamera tetap di sudut target.
+
+Di bawah model ada penjelasan dalam kalimat, misalnya *"Badan condong ke depan 5,6° dan miring ke kiri 5,5°. Servo nunduk −4,8°, servo kiri-kanan +6,4° dari tengah. Hasilnya kamera 35,8° menunduk dan 0,9° kiri-kanan."*
+
 | HP | Komputer |
 |---|---|
 | ![Aplikasi di HP](gambar/aplikasi_hp.png) | ![Aplikasi di komputer](gambar/aplikasi_pc.png) |
+
+![Layar awal](gambar/aplikasi_awal.png)
 
 - Sudut nunduk 25/30/35/40/45° atau geser 10–60°, kiri-kanan, mode Stabil / Tengah / Manual / Mati.
 - Kalibrasi otomatis: mendeteksi arah IMU, kabel servo tertukar, arah dan skala tiap servo.
@@ -78,7 +89,7 @@ Lihat `stl/RENCANA_CETAK.md`. Ringkasnya:
 ## Firmware
 
 1. Arduino IDE → Boards Manager → **esp32 by Espressif Systems** versi 3.x.
-2. Board **ESP32C3 Dev Module**, **USB CDC On Boot: Enabled**, Partition Scheme **Huge APP (3MB No OTA/1MB SPIFFS)**.
+2. Board **ESP32C3 Dev Module**, **USB CDC On Boot: Enabled**. Partition Scheme bawaan sudah cukup: firmware berukuran ±711 KB, sekitar 54% ruang aplikasi.
 3. Buka `firmware/D435_gimbal_ESP32C3/D435_gimbal_ESP32C3.ino`, lalu upload. Tidak perlu library tambahan.
 4. Buka aplikasi, sambungkan, lalu jalankan **Kalibrasi otomatis** dan **Kalibrasi datar**.
 
@@ -87,6 +98,11 @@ Sebelum dikalibrasi, servo ditahan di tengah supaya tidak bergerak liar.
 Perintah teks (Serial Monitor 115200 atau Terminal di aplikasi): `HELP`, `GET`, `STATUS`, `SET <kunci> <nilai>`, `MODE stab|center|manual|off`, `CAL auto|gyro|level`, `STEP p 5`, `PIN <baru>`.
 
 ## Uji simulasi firmware
+
+Setiap push otomatis diuji GitHub Actions (badge di atas):
+- firmware di-compile dengan Arduino CLI + ESP32 core 3.3.12 asli, hasilnya 0 error dan 0 peringatan;
+- simulasi fisik di bawah ini dijalankan.
+
 
 Firmware asli dijalankan di komputer melawan model fisik: dua servo dengan dead band dan backlash, sensor ber-noise yang terpasang terbalik, kabel servo tertukar, dan badan yang berjalan.
 
