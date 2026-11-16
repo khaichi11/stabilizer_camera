@@ -1,25 +1,33 @@
 /*
   ============================================================================================
-  GIMBAL D435 (sabuk) - firmware v4.0
+  GIMBAL D435 (sabuk) - firmware v4.1
   ESP32-C3 Super Mini + MPU6050 (GY-521) + 2x MG90S 180 derajat
   ============================================================================================
   Fitur
-   - Menstabilkan nunduk (pitch) dan kiri-kanan (roll). IMU menempel di bawah dudukan kamera,
-     jadi yang diukur adalah kamera itu sendiri (closed loop).
-   - Dikendalikan dari aplikasi web lewat Bluetooth (BLE, Nordic UART Service) atau kabel USB.
-     Bluetooth dilindungi sandi (PIN, challenge-response SHA-256: sandi tidak pernah dikirim).
+   - Menstabilkan sumbu atas-bawah (pitch) dan sumbu kanan-kiri (roll). IMU menempel di bawah dudukan
+     kamera, sehingga yang diukur adalah kamera itu sendiri (closed loop), ditambah umpan maju:
+     gerak badan dihitung dari IMU dikurangi model servo, lalu langsung dilawan.
+   - WiFi: gimbal menyajikan aplikasinya sendiri. Hubungkan gimbal ke hotspot ponsel, lalu buka di
+     Safari/Chrome:  http://gimbal-d435.local   (atau alamat IP yang tampil di aplikasi / Serial Monitor)
+     Pada pemakaian pertama (belum mengenal hotspot apa pun) gimbal memancarkan WiFi
+     "Gimbal-D435-xxxx" (sandi gimbald435): hubungkan ponsel/iPad ke WiFi itu, buka http://192.168.4.1,
+     lalu isi data hotspot di menu Perangkat. Beberapa ponsel/iPad dapat terhubung bersamaan; masing-
+     masing memerlukan sandi (PIN, challenge-response SHA-256: sandi tidak pernah dikirim).
+     Kabel USB tetap dapat dipakai.
    - Semua pengaturan tersimpan di flash dan tetap ada walau listrik dicabut.
-   - Kalibrasi otomatis: arah sumbu IMU, kabel servo tertukar, arah dan skala tiap servo.
-   - Kalibrasi datar (pakai waterpass / aplikasi waterpass di HP) dan kalibrasi gyro.
+   - Kalibrasi otomatis: arah sumbu IMU, kabel servo tertukar, arah, skala, dan kecepatan tiap servo.
+   - Kalibrasi datar (memakai waterpass / aplikasi waterpass di ponsel) dan kalibrasi gyro.
    - Uji respons (step test), log kejadian, penyebab restart (termasuk tegangan turun).
    - Servo menyala bergantian dan bergerak pelan di awal (lonjakan arus kecil).
-   - LED biru (GPIO8): kedip pendek tiap 2 dtk = menunggu Bluetooth, kedip 1 Hz = tersambung
-     tapi belum masuk sandi, NYALA TERUS = tersambung dan sandi benar, kedip cepat = IMU bermasalah.
+   - LED biru (GPIO8): berkedip dua kali tiap 2 s = WiFi gimbal aktif dan menunggu diatur,
+     kedip singkat tiap 1 s = mencari hotspot, kedip singkat tiap 2 s = siap (terhubung ke hotspot),
+     berkedip 1 Hz = aplikasi terhubung tetapi sandi belum dimasukkan, menyala terus = aplikasi
+     terhubung, berkedip cepat = IMU bermasalah.
 
   Kabel (ESP32-C3 Super Mini)
     MPU6050  VCC -> 3V3   GND -> G   SDA -> GPIO6   SCL -> GPIO7
-    Servo nunduk (di G_Base)          oranye -> GPIO3
-    Servo kiri-kanan (di belakang kamera) oranye -> GPIO4   (kalau tertukar, kalibrasi otomatis membetulkannya)
+    Servo putar atas-bawah (di G_Base)            oranye -> GPIO3
+    Servo putar kanan-kiri (di belakang kamera)   oranye -> GPIO4   (jika tertukar, kalibrasi otomatis memperbaikinya)
     Merah kedua servo -> 5V,  coklat kedua servo -> G,  kapasitor 100-470 uF di 5V/G
     Listrik: power bank 5 V >= 2 A -> kabel USB-A ke USB-C -> port USB-C ESP32.  Tanpa resistor.
 
@@ -27,48 +35,56 @@
     - Boards Manager: "esp32" by Espressif Systems, versi 3.x
     - Tools > Board: "ESP32C3 Dev Module"
     - Tools > USB CDC On Boot: "Enabled"
-    - Partition Scheme bawaan sudah cukup (firmware +-711 KB)
-    - Tidak perlu library tambahan.
+    - Tools > Partition Scheme: "Huge APP (3MB No OTA/1MB SPIFFS)"  (aplikasi web ikut di dalam firmware)
+    - Tidak perlu library tambahan. File web_files.h (aplikasi web) harus satu folder dengan file ini.
 
-  Sandi Bluetooth bawaan: 123456  (ganti di aplikasi, menu Keamanan)
+  Sandi bawaan aplikasi: 123456  (ganti di aplikasi, menu Keamanan)
   Lupa sandi: colok USB, buka Serial Monitor 115200, kirim:  PIN 123456
-  Perintah teks (USB atau Bluetooth): kirim HELP.
+  Perintah teks (USB atau WiFi): kirim HELP.
 */
 #include <Arduino.h>
 #include <Wire.h>
 #include <Preferences.h>
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#if defined(CONFIG_BLUEDROID_ENABLED)
-#include <BLE2902.h>
-#endif
+#include <WiFi.h>
+#include <ESPmDNS.h>
+#include <lwip/sockets.h>
+#include <errno.h>
 #include <stdarg.h>
 #include "esp_system.h"
 #include "esp_random.h"
+#include "web_files.h"
 
-#define FW_VERSION "4.0"
+#define FW_VERSION "4.1"
 
 // ------------------------------------------------------------------------------------ pins
 static const int PIN_SDA = 6, PIN_SCL = 7;
-static const int PIN_SERVO_A = 3;   // normally the pitch servo (nunduk, in G_Base)
-static const int PIN_SERVO_B = 4;   // normally the roll servo (kiri-kanan, behind the camera)
+static const int PIN_SERVO_A = 3;   // normally the pitch servo (in G_Base)
+static const int PIN_SERVO_B = 4;   // normally the roll servo (behind the camera)
 static const int PIN_LED = 8;       // onboard blue LED, active LOW
-
-// ------------------------------------------------------------------------------------ BLE: Nordic UART Service
-#define NUS_SERVICE "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
-#define NUS_RX "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  // app -> gimbal (write)
-#define NUS_TX "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  // gimbal -> app (notify)
 
 // ------------------------------------------------------------------------------------ constants
 static const uint32_t LOOP_US = 5000;  // 200 Hz control loop
 static const float CAL_DUS = 150.0f;   // auto-calibration servo move (us), about 14 degrees
+static const float TIME_DUS = 60.0f;   // auto-calibration timing steps (us), about 5 degrees
+static const int TIME_STEPS = 4;       // per servo: up, down, up, down
+static const int TIME_STEP_MS = 305;   // 305 ms: each step starts 5 ms later in the 20 ms servo frame
 static const char *DEFAULT_PIN = "123456";
+static const float PRED_DEFAULT = 1.1f;
+static const float DBCOMP_DEFAULT = 0.0f;
+static const float SRVDB_DEFAULT = 6.0f;
+static const uint16_t PWMHZ_DEFAULT = 100;  // fine for analog servos like MG90S; 50 if one runs hot, up to 333 for digital servos
+static const float SMOOTH_DEFAULT = 0.02f;
 static const char *DEFAULT_NAME = "Gimbal D435";
+static const char *DEFAULT_AP_PASS = "gimbald435";
+static const int WS_N = 3;    // phones/tablets connected at the same time
+static const int HTTP_N = 4;  // files being sent at the same time (a browser opens several)
 
 enum Mode : uint8_t { MODE_STAB = 0, MODE_CENTER = 1, MODE_MANUAL = 2, MODE_OFF = 3 };
 static const char *MODE_NAMES[] = { "stab", "center", "manual", "off" };
-enum : uint8_t { TO_USB = 1, TO_BLE = 2 };
+enum : uint8_t { TO_USB = 1 };  // destinations: bit 0 = USB, bit 1+i = web app client i
+static inline uint8_t toWs(int i) {
+  return (uint8_t)(2 << i);
+}
 
 // ------------------------------------------------------------------------------------ configuration (flash)
 struct Config {
@@ -77,6 +93,37 @@ struct Config {
   uint16_t calOK;  // bit0 = auto calibration done, bit1 = level done, bit2 = gyro done
   float pitchSet, rollSet;
   float kp, gain, rateFF, deadband, smooth, maxRate, accTau;  // PID: kp = P, gain = I, rateFF = D (gyro)
+  uint8_t dlpf, autoBias, bootGyro, nod;
+  int16_t trimP, trimR;
+  int8_t dirP, dirR, swapServo, startMode;
+  float usDegP, usDegR, limP, limR;
+  int8_t axF, axL, axU, sgF, sgL, sgU, telHz, ledOn;
+  float lvlP, lvlR;
+  float bias[3];
+  char name[24];
+  char pin[16];
+  // v4.1
+  float ffBody;    // 0..1: turn the servo against the measured body motion right away (feed-forward)
+  float pred;      // 0..1.5: how much of the servo's delay to predict ahead
+  float srvDelay;  // ms: servo dead time as the IMU sees it (50 Hz frame + electronics + IMU filter)
+  float srvTau;    // ms: servo lag after the dead time
+  float accTauW;   // s: accelerometer time constant while walking
+  float dbComp;    // us: servo dead band compensation
+  float srvDb;     // us: servo dead band (it ignores changes smaller than this)
+  uint16_t pwmHz;  // servo pulses per second
+  uint8_t wifiOn;  // 0 = WiFi off (USB only)
+  uint8_t pad41;
+  char wifiSsid[33];  // hotspot to join (empty = only the gimbal's own WiFi)
+  char wifiPass[65];
+  char apPass[33];    // the gimbal's own WiFi (8..32)
+  uint32_t crc;
+};
+struct ConfigV40 {  // firmware 4.0 layout, read once and upgraded
+  uint32_t magic;
+  uint16_t size;
+  uint16_t calOK;
+  float pitchSet, rollSet;
+  float kp, gain, rateFF, deadband, smooth, maxRate, accTau;
   uint8_t dlpf, autoBias, bootGyro, nod;
   int16_t trimP, trimR;
   int8_t dirP, dirR, swapServo, startMode;
@@ -102,7 +149,7 @@ struct Sha256 {
 };
 struct Ev {
   uint32_t t;
-  char s[72];
+  char s[144];
 };
 enum CalKind : uint8_t { CAL_IDLE = 0, CAL_GYRO, CAL_LEVEL, CAL_AUTO };
 static const char *CAL_NAMES[] = { "idle", "gyro", "level", "auto" };
@@ -117,12 +164,51 @@ struct Cal {
   float usA = 0, usB = 0;  // auto: pulse offsets (us) on GPIO3 / GPIO4
   float up[3];
   float rot[2][3], aBefore[2][3], aAfter[2][3];
+  float tth, dSum, tauSum;  // auto: servo timing steps
+  float tb[64];
+  uint16_t tt[64];
+  uint8_t tn, tstep, tCount;
 } cal;
 struct Sample {
   uint16_t t;
   int16_t sp, p, sr, r, op, orr;
 };
 static const int CAP_N = 300;  // 3 s at 100 Hz
+static const int MDL_N = 48;   // servo model history, 240 ms at 200 Hz
+struct SrvModel {              // what the servo has really done by now, as the IMU will see it
+  float hist[MDL_N];
+  uint8_t i;
+  float m, rate;
+};
+static const size_t WS_TX = 6144;
+struct WsConn {
+  WiFiClient c;
+  bool used, authed;
+  char nonce[33];
+  uint8_t rx[700];  // incoming WebSocket bytes
+  uint16_t rn;
+  char line[256];  // command being received
+  uint16_t ln;
+  char tx[WS_TX];  // outgoing text, sent as WebSocket frames
+  uint16_t th, tt;
+  uint8_t fr[1408];  // frame (or the handshake) being sent
+  uint16_t frN, frOff;
+  uint32_t lastRx, closeAt;
+};
+struct HttpConn {  // a browser fetching one file of the app
+  WiFiClient c;
+  bool used;
+  char req[1200];
+  uint16_t rn;
+  char head[300];  // response header being sent
+  uint16_t hn, hoff;
+  const uint8_t *body;
+  uint32_t len, off, t0;
+};
+struct DbComp {  // servo dead band compensation state
+  float pk;
+  int8_t sg;
+};
 
 // ------------------------------------------------------------------------------------ runtime state
 // IMU
@@ -135,6 +221,8 @@ float gyrUncal[3] = { 0, 0, 0 };   // deg/s, raw IMU axes, no bias removed
 float gyrRaw[3] = { 0, 0, 0 };     // deg/s, raw IMU axes, bias removed
 // attitude
 float thRaw = 0, phRaw = 0;        // estimator (deg), before level offsets
+float gEst[3] = { 0, 0, 1 };       // gravity direction in camera axes (F, L, U), unit length
+float walkLvl = 0, walkF = 0;      // walking detector: mean |a|-1g, and 0..1
 float pitchMeas = 0, rollMeas = 0; // after level offsets (deg)
 float pitchRate = 0, rollRate = 0; // Euler rates (deg/s)
 float stillTime = 0;
@@ -143,7 +231,9 @@ uint32_t accCount = 0, accRejCount = 0;
 float accRejPct = 0;
 // control
 Mode mode = MODE_STAB;
-float cmdP = 0, cmdR = 0;    // controller output (deg of camera rotation)
+float cmdP = 0, cmdR = 0;    // PID integrator (deg of camera rotation)
+float ffP = 0, ffR = 0;      // body feed-forward part of the output
+float lastTgtP = 0, lastTgtR = 0;
 float slewP = 0, slewR = 0;  // after slew limit
 float outP = 0, outR = 0;    // after smoothing
 float manP = 0, manR = 0;    // manual mode targets
@@ -152,7 +242,7 @@ bool satP = false, satR = false;
 float nodOffset = 0;
 uint32_t nodUntil = 0, softStartUntil = 0;
 // housekeeping
-uint32_t lastLoopUs = 0, loopCount = 0, loopHz = 0, statT = 0, saveAt = 0, telT = 0, rebootAt = 0, disconnectAt = 0;
+uint32_t lastLoopUs = 0, loopCount = 0, loopHz = 0, statT = 0, saveAt = 0, telT = 0, rebootAt = 0;
 uint32_t bootCount = 0, brownCount = 0;
 esp_reset_reason_t rstReason;
 bool firstBoot = false;
@@ -264,19 +354,23 @@ void authHash(const char *nonce, const char *pin, char out[65]) {
 
 // ------------------------------------------------------------------------------------ config load / save
 void cfgDefaults(Config &c, bool keepIdentity) {
-  char name[24], pin[16];
+  char name[24], pin[16], ssid[33], wpass[65], apass[33];
+  uint8_t won = c.wifiOn;
   memcpy(name, c.name, sizeof(name));
   memcpy(pin, c.pin, sizeof(pin));
+  memcpy(ssid, c.wifiSsid, sizeof(ssid));
+  memcpy(wpass, c.wifiPass, sizeof(wpass));
+  memcpy(apass, c.apPass, sizeof(apass));
   memset(&c, 0, sizeof(c));
   c.magic = CFG_MAGIC;
   c.size = sizeof(Config);
   c.pitchSet = 35.0f;
   c.rollSet = 0.0f;
   c.kp = 0.6f;
-  c.gain = 15.0f;
+  c.gain = 10.0f;
   c.rateFF = 0.8f;
   c.deadband = 0.2f;
-  c.smooth = 0.03f;
+  c.smooth = SMOOTH_DEFAULT;
   c.maxRate = 400.0f;
   c.accTau = 0.6f;
   c.dlpf = 3;
@@ -296,11 +390,27 @@ void cfgDefaults(Config &c, bool keepIdentity) {
   c.sgF = 1;
   c.sgL = 1;
   c.sgU = 1;
-  c.telHz = 10;
+  c.telHz = 20;
   c.ledOn = 1;
-  if (keepIdentity) {
+  c.ffBody = 1.0f;
+  c.pred = PRED_DEFAULT;
+  c.srvDelay = 15.0f;
+  c.srvTau = 25.0f;
+  c.accTauW = 3.0f;
+  c.dbComp = DBCOMP_DEFAULT;
+  c.srvDb = SRVDB_DEFAULT;
+  c.pwmHz = PWMHZ_DEFAULT;
+  c.wifiOn = 1;
+  strcpy(c.apPass, DEFAULT_AP_PASS);
+  if (keepIdentity) {  // name, PIN and WiFi stay, so "back to defaults" does not cut the connection
     memcpy(c.name, name, sizeof(name));
     memcpy(c.pin, pin, sizeof(pin));
+    memcpy(c.wifiSsid, ssid, sizeof(ssid));
+    memcpy(c.wifiPass, wpass, sizeof(wpass));
+    memcpy(c.apPass, apass, sizeof(apass));
+    c.wifiOn = won;
+    c.wifiSsid[sizeof(c.wifiSsid) - 1] = c.wifiPass[sizeof(c.wifiPass) - 1] = c.apPass[sizeof(c.apPass) - 1] = 0;
+    if (strlen(c.apPass) < 8) strcpy(c.apPass, DEFAULT_AP_PASS);
   } else {
     strncpy(c.name, DEFAULT_NAME, sizeof(c.name) - 1);
     strncpy(c.pin, DEFAULT_PIN, sizeof(c.pin) - 1);
@@ -308,16 +418,42 @@ void cfgDefaults(Config &c, bool keepIdentity) {
   c.name[sizeof(c.name) - 1] = 0;
   c.pin[sizeof(c.pin) - 1] = 0;
 }
+bool cfgMigrated = false;
 bool cfgLoad() {
   Config t;
-  if (prefs.getBytesLength("cfg") != sizeof(Config)) return false;
-  prefs.getBytes("cfg", &t, sizeof(t));
-  if (t.magic != CFG_MAGIC || t.size != sizeof(Config)) return false;
-  if (t.crc != crc32((const uint8_t *)&t, offsetof(Config, crc))) return false;
+  size_t len = prefs.getBytesLength("cfg");
+  if (len == sizeof(Config)) {
+    prefs.getBytes("cfg", &t, sizeof(t));
+    if (t.magic != CFG_MAGIC || t.size != sizeof(Config)) return false;
+    if (t.crc != crc32((const uint8_t *)&t, offsetof(Config, crc))) return false;
+  } else if (len == sizeof(ConfigV40)) {  // settings from firmware 4.0: keep them, new settings get defaults
+    ConfigV40 o;
+    prefs.getBytes("cfg", &o, sizeof(o));
+    if (o.magic != CFG_MAGIC || o.size != sizeof(ConfigV40)) return false;
+    if (o.crc != crc32((const uint8_t *)&o, offsetof(ConfigV40, crc))) return false;
+    memset(&t, 0, sizeof(t));
+    cfgDefaults(t, false);
+    memcpy(&t, &o, offsetof(ConfigV40, crc));  // same layout up to the old crc
+    t.size = sizeof(Config);
+    cfgMigrated = true;
+  } else {
+    return false;
+  }
   t.name[sizeof(t.name) - 1] = 0;
   t.pin[sizeof(t.pin) - 1] = 0;
   if (t.axF < 0 || t.axF > 2 || t.axL < 0 || t.axL > 2 || t.axU < 0 || t.axU > 2) return false;
   if (t.startMode > MODE_OFF) t.startMode = MODE_STAB;
+  t.ffBody = clampf(t.ffBody, 0.0f, 1.0f);
+  t.pred = clampf(t.pred, 0.0f, 1.5f);
+  t.srvDelay = clampf(t.srvDelay, 0.0f, 60.0f);
+  t.srvTau = clampf(t.srvTau, 5.0f, 120.0f);
+  t.accTauW = clampf(t.accTauW, 0.3f, 10.0f);
+  t.dbComp = clampf(t.dbComp, 0.0f, 10.0f);
+  t.srvDb = clampf(t.srvDb, 0.0f, 20.0f);
+  if (t.pwmHz < 50 || t.pwmHz > 333) t.pwmHz = PWMHZ_DEFAULT;
+  t.wifiSsid[sizeof(t.wifiSsid) - 1] = t.wifiPass[sizeof(t.wifiPass) - 1] = t.apPass[sizeof(t.apPass) - 1] = 0;
+  if (strlen(t.apPass) < 8) strcpy(t.apPass, DEFAULT_AP_PASS);
+  t.name[sizeof(t.name) - 1] = t.pin[sizeof(t.pin) - 1] = 0;
   cfg = t;
   return true;
 }
@@ -331,33 +467,41 @@ void cfgSaveSoon() {
   if (saveAt == 0) saveAt = 1;
 }
 
-// ------------------------------------------------------------------------------------ output (USB + Bluetooth)
-BLEServer *bleServer = nullptr;
-BLECharacteristic *bleTx = nullptr;
-volatile bool bleConnected = false, bleJustConnected = false, bleJustDisconnected = false;
-bool bleAuthed = false;
-uint16_t bleMtu = 23;
-char nonceHex[33] = "";
+// ------------------------------------------------------------------------------------ output (USB + WiFi app)
+// Each web app client has its own outgoing text buffer. netPoll() sends from it without ever waiting,
+// so a slow phone can never stall the 200 Hz loop.
+WsConn ws[WS_N];
 uint8_t authFails = 0;
 uint32_t lockUntil = 0;
-QueueHandle_t bleRxQ = nullptr;
 
-static char txRing[6144];
-static uint16_t txH = 0, txT = 0;
-size_t txUsed() {
-  return (size_t)((txH + sizeof(txRing) - txT) % sizeof(txRing));
+size_t wsUsed(const WsConn &w) {
+  return (size_t)((w.th + WS_TX - w.tt) % WS_TX);
 }
-size_t txFree() {
-  return sizeof(txRing) - 1 - txUsed();
+size_t wsFree(const WsConn &w) {
+  return WS_TX - 1 - wsUsed(w);
 }
-void txPush(const char *s, size_t n) {
+void wsPush(WsConn &w, const char *s, size_t n) {
   for (size_t i = 0; i < n; i++) {
-    txRing[txH] = s[i];
-    txH = (txH + 1) % sizeof(txRing);
+    w.tx[w.th] = s[i];
+    w.th = (w.th + 1) % WS_TX;
   }
 }
+int wsCount(bool authedOnly) {
+  int n = 0;
+  for (int i = 0; i < WS_N; i++)
+    if (ws[i].used && (ws[i].authed || !authedOnly)) n++;
+  return n;
+}
 uint8_t allDest() {
-  return TO_USB | ((bleConnected && bleAuthed) ? TO_BLE : 0);
+  uint8_t d = TO_USB;
+  for (int i = 0; i < WS_N; i++)
+    if (ws[i].used && ws[i].authed) d |= toWs(i);
+  return d;
+}
+bool destBusy(uint8_t dest, size_t need) {  // some web client in dest has less than 'need' bytes free
+  for (int i = 0; i < WS_N; i++)
+    if ((dest & toWs(i)) && ws[i].used && wsFree(ws[i]) < need) return true;
+  return false;
 }
 void usbWrite(const char *s, size_t n) {
   if (!Serial) return;                                  // no computer listening
@@ -365,15 +509,16 @@ void usbWrite(const char *s, size_t n) {
   Serial.write((const uint8_t *)s, n);
   Serial.write((uint8_t)'\n');
 }
-// returns false if the Bluetooth part had to be dropped (buffer full)
+// returns false if a web client had to be skipped (its buffer is full)
 bool sendTo(uint8_t dest, const char *s) {
   size_t n = strlen(s);
   bool ok = true;
   if (dest & TO_USB) usbWrite(s, n);
-  if ((dest & TO_BLE) && bleConnected) {
-    if (txFree() >= n + 1) {
-      txPush(s, n);
-      txPush("\n", 1);
+  for (int i = 0; i < WS_N; i++) {
+    if (!(dest & toWs(i)) || !ws[i].used) continue;
+    if (wsFree(ws[i]) >= n + 1) {
+      wsPush(ws[i], s, n);
+      wsPush(ws[i], "\n", 1);
     } else ok = false;
   }
   return ok;
@@ -402,20 +547,36 @@ void event(const char *fmt, ...) {
   sendf(allDest(), "EV %lu %s", (unsigned long)e.t, e.s);
 }
 
-// ------------------------------------------------------------------------------------ servos (LEDC 50 Hz)
+// ------------------------------------------------------------------------------------ servos (LEDC)
+// A servo only takes a new position when a pulse arrives: at 50 Hz it moves in 20 ms stairs, which
+// shakes the camera (jello in the RGB video). More pulses per second = smaller stairs. The pulse
+// width (500..2500 us) is the same at any rate.
+uint16_t pwmHzNow = 50;
 void pwmAttach(int pin) {
+  pwmHzNow = cfg.pwmHz;
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
-  ledcAttach(pin, 50, 14);
+  ledcAttach(pin, pwmHzNow, 14);
 #else
-  ledcSetup(pin == PIN_SERVO_A ? 0 : 1, 50, 14);
+  ledcSetup(pin == PIN_SERVO_A ? 0 : 1, pwmHzNow, 14);
   ledcAttachPin(pin, pin == PIN_SERVO_A ? 0 : 1);
+#endif
+}
+void pwmSetHz(uint16_t hz) {
+  if (hz == pwmHzNow) return;
+  pwmHzNow = hz;
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcChangeFrequency(PIN_SERVO_A, hz, 14);
+  ledcChangeFrequency(PIN_SERVO_B, hz, 14);
+#else
+  ledcChangeFrequency(0, hz, 14);
+  ledcChangeFrequency(1, hz, 14);
 #endif
 }
 void pwmWriteUs(int pin, float us) {  // us <= 0: no pulses (servo limp)
   uint32_t duty = 0;
   if (us > 0) {
     us = clampf(us, 500.0f, 2500.0f);
-    duty = (uint32_t)(us * 16383.0f / 20000.0f + 0.5f);
+    duty = (uint32_t)(us * 16383.0f * pwmHzNow / 1e6f + 0.5f);
   }
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   ledcWrite(pin, duty);
@@ -504,46 +665,137 @@ void accAngles(const float *a, float &th, float &ph) {
   th = atan2f(-f, sqrtf(l * l + u * u)) * RAD_TO_DEG;
   ph = atan2f(l, u) * RAD_TO_DEG;
 }
+void gravAngles(float &th, float &ph) {
+  th = atan2f(-gEst[0], sqrtf(gEst[1] * gEst[1] + gEst[2] * gEst[2])) * RAD_TO_DEG;
+  ph = atan2f(gEst[1], gEst[2]) * RAD_TO_DEG;
+}
 void attitudeReset() {
-  accAngles(accRaw, thRaw, phRaw);
+  float f, l, u;
+  toCam(accRaw, f, l, u);
+  float n = sqrtf(f * f + l * l + u * u);
+  if (n < 0.3f) {
+    f = 0;
+    l = 0;
+    u = n = 1;
+  }
+  gEst[0] = f / n;
+  gEst[1] = l / n;
+  gEst[2] = u / n;
+  gravAngles(thRaw, phRaw);
   pitchMeas = thRaw - cfg.lvlP;
   rollMeas = phRaw - cfg.lvlR;
 }
+// Attitude = direction of gravity in camera axes. The gyro turns that direction every 5 ms; the
+// accelerometer pulls it back slowly. Done on the vector (not on the angles), so the forward/back
+// pushes of each step, which come together with the up/down bounce, average out instead of leaving
+// a tilt behind. While walking the accelerometer is trusted less (accTauW) but evenly.
 void estimate(float dt) {
   float aF, aL, aU, gF, gL, gU;
   toCam(accRaw, aF, aL, aU);
   toCam(gyrRaw, gF, gL, gU);
+  // a direction fixed in the world, seen from the turning camera: dg/dt = -w x g
+  float wF = gF * DEG_TO_RAD, wL = gL * DEG_TO_RAD, wU = gU * DEG_TO_RAD;
+  float g0 = gEst[0], g1 = gEst[1], g2 = gEst[2];
+  gEst[0] = g0 - (wL * g2 - wU * g1) * dt;
+  gEst[1] = g1 - (wU * g0 - wF * g2) * dt;
+  gEst[2] = g2 - (wF * g1 - wL * g0) * dt;
+  // walking detector: the up/down bounce of the steps
+  float an = sqrtf(aF * aF + aL * aL + aU * aU), dev = fabsf(an - 1.0f);
+  walkLvl += (dev - walkLvl) * dt / (0.5f + dt);
+  walkF = clampf((walkLvl - 0.02f) / 0.05f, 0.0f, 1.0f);
+  // accelerometer correction: still -> skip shakes (|a| far from 1 g). Walking -> take every sample with
+  // the same weight (only hard jolts above 1 g are dropped): weighting by |a| would favour one part of
+  // the step, and the forward push of that part would show up as a tilt.
+  float w = (1.0f - walkF) * clampf(1.0f - dev / 0.15f, 0.0f, 1.0f) + walkF * (dev < 1.0f ? 1.0f : 0.0f);
+  accCount++;
+  if (w < 0.5f) accRejCount++;
+  if (an > 0.3f && w > 0.0f) {
+    float tau = cfg.accTau + (cfg.accTauW - cfg.accTau) * walkF;
+    float k = w * dt / (tau + dt);
+    gEst[0] += (aF - gEst[0]) * k;
+    gEst[1] += (aL - gEst[1]) * k;
+    gEst[2] += (aU - gEst[2]) * k;
+  }
+  float gn = sqrtf(gEst[0] * gEst[0] + gEst[1] * gEst[1] + gEst[2] * gEst[2]);
+  if (gn > 1e-3f) {
+    gEst[0] /= gn;
+    gEst[1] /= gn;
+    gEst[2] /= gn;
+  } else {
+    attitudeReset();
+  }
+  gravAngles(thRaw, phRaw);
+  // Euler rates (deg/s) for the D term and the body estimate
   float ph = phRaw * DEG_TO_RAD, th = thRaw * DEG_TO_RAD;
   float c = cosf(th);
   if (fabsf(c) < 0.2f) c = (c < 0) ? -0.2f : 0.2f;
   float tanT = sinf(th) / c;
-  float phDot = gF + tanT * (gL * sinf(ph) + gU * cosf(ph));
-  float thDot = gL * cosf(ph) - gU * sinf(ph);
-  thRaw += thDot * dt;
-  phRaw += phDot * dt;
-  // accelerometer correction, trusted less while walking/shaking (|a| far from 1 g)
-  float an = sqrtf(aF * aF + aL * aL + aU * aU);
-  float w = clampf(1.0f - fabsf(an - 1.0f) / 0.15f, 0.0f, 1.0f);
-  accCount++;
-  if (w < 0.5f) accRejCount++;
-  if (an > 0.3f && w > 0.0f) {
-    float thA = atan2f(-aF, sqrtf(aL * aL + aU * aU)) * RAD_TO_DEG;
-    float phA = atan2f(aL, aU) * RAD_TO_DEG;
-    float k = w * dt / (cfg.accTau + dt);
-    thRaw += (thA - thRaw) * k;
-    phRaw += wrap180(phA - phRaw) * k;
-  }
-  phRaw = wrap180(phRaw);
-  thRaw = clampf(thRaw, -89.0f, 89.0f);
-  pitchRate = thDot;
-  rollRate = phDot;
+  pitchRate = gL * cosf(ph) - gU * sinf(ph);
+  rollRate = gF + tanT * (gL * sinf(ph) + gU * cosf(ph));
   pitchMeas = thRaw - cfg.lvlP;
   rollMeas = phRaw - cfg.lvlR;
-  // stillness (used by calibration and slow gyro-bias tracking)
   float gm = sqrtf(gF * gF + gL * gL + gU * gU);
+  // stillness (used by calibration and slow gyro-bias tracking)
   if (gm < 1.5f && fabsf(an - 1.0f) < 0.05f) stillTime += dt;
   else stillTime = 0;
   isStill = stillTime > 1.0f;
+}
+
+// ------------------------------------------------------------------------------------ servo model
+// The servo only reads a new pulse every 20 ms, then needs time to get there, and the IMU filter adds a
+// few ms before the camera's motion shows up. The model replays our own output through that delay and
+// lag, so "camera angle minus model" is how far the BODY is tilted, without waiting for the PID.
+SrvModel mdlP, mdlR;
+DbComp dbcP, dbcR;
+void srvModelReset(SrvModel &s, float v) {
+  for (int k = 0; k < MDL_N; k++) s.hist[k] = v;
+  s.i = 0;
+  s.m = v;
+  s.rate = 0;
+}
+void srvModelStep(SrvModel &s, float out, float usDeg, float dt) {
+  s.hist[s.i] = out;
+  s.i = (s.i + 1) % MDL_N;
+  float d = clampf(cfg.srvDelay * 1e-3f / fmaxf(dt, 1e-4f), 0.0f, (float)(MDL_N - 2));
+  int d0 = (int)d;
+  float fr = d - d0;
+  float a = s.hist[(s.i + MDL_N - 1 - d0) % MDL_N], b = s.hist[(s.i + MDL_N - 2 - d0) % MDL_N];
+  float delayed = a + (b - a) * fr;
+  float k = 1.0f - expf(-dt / fmaxf(cfg.srvTau * 1e-3f, 0.002f));
+  // like the servo, the model stays put for small changes and stops at the edge of the dead band
+  // (minus what dbComp already makes up for)
+  float db = fmaxf(cfg.srvDb - cfg.dbComp, 0.0f) / fmaxf(usDeg, 1.0f);
+  float err = delayed - s.m, prev = s.m;
+  if (fabsf(err) > db) s.m += (err - copysignf(db, err)) * k;
+  s.rate = (s.m - prev) / dt;
+}
+void controlReset() {
+  cmdP = cmdR = slewP = slewR = outP = outR = ffP = ffR = lastTgtP = lastTgtR = 0;
+  srvModelReset(mdlP, 0);
+  srvModelReset(mdlR, 0);
+  dbcP = DbComp();
+  dbcR = DbComp();
+}
+// A servo stops as soon as it is inside its dead band, so it ends up short of the command in the
+// direction it was moving. Adding the dead band in that direction lets it stop on the command.
+// The direction only flips after a 1 us reversal, so noise cannot make it rattle.
+float dbCompApply(DbComp &c, float us) {
+  if (cfg.dbComp <= 0) {
+    c.pk = us;
+    c.sg = 0;
+    return us;
+  }
+  const float h = 1.0f;
+  if (c.sg >= 0 && us < c.pk - h) {
+    c.sg = -1;
+    c.pk = us;
+  } else if (c.sg <= 0 && us > c.pk + h) {
+    c.sg = 1;
+    c.pk = us;
+  } else if ((c.sg > 0 && us > c.pk) || (c.sg < 0 && us < c.pk)) {
+    c.pk = us;
+  }
+  return us + c.sg * cfg.dbComp;
 }
 
 // ------------------------------------------------------------------------------------ calibration
@@ -593,15 +845,58 @@ void axesString(char *out, int8_t aF, int8_t sF, int8_t aL, int8_t sL, int8_t aU
 // Auto calibration. Gimbal upright as when worn (or standing on its clip), camera looking down, still.
 // 1) gyro bias + gravity direction, 2) each servo moves +150 us and back: gyro gives the rotation axis,
 // accelerometer gives the angle. Result: IMU axis mapping, servo cables swapped or not, direction and
-// microseconds per degree of each servo.
-enum { AP_SETTLE = 0, AP_GYRO, AP_BEFORE, AP_OUT, AP_HOLD, AP_BACK };
+// microseconds per degree of each servo. 3) four quick 60 us steps per servo: how long until the camera
+// starts to turn (delay) and how fast it gets there (lag), for the servo model.
+enum { AP_SETTLE = 0, AP_GYRO, AP_BEFORE, AP_OUT, AP_HOLD, AP_BACK, AP_TIME };
+void calTimeStart(uint8_t step) {
+  calPhase(AP_TIME);
+  cal.tstep = step;
+  cal.tn = 0;
+  cal.tth = 0;
+  float *mv = (cal.servo == 0) ? &cal.usA : &cal.usB;
+  *mv = (step % 2 == 0) ? TIME_DUS : 0;
+}
+// One step recorded as camera angle about that servo's axis vs time. A servo behaves like a dead time
+// followed by a lag: t10 = delay + 0.105 lag, t63 = delay + lag.
+void calTimeAnalyse() {
+  int n = cal.tn;
+  if (n < 40) return;
+  float fin = 0;
+  int c = 0;
+  for (int i = 0; i < n; i++) {
+    if (cal.tt[i] >= 200 && cal.tt[i] < 300) {
+      fin += cal.tb[i];
+      c++;
+    }
+  }
+  if (!c) return;
+  fin /= c;
+  if (fabsf(fin) < 1.0f) return;
+  float t10 = -1, t63 = -1, pv = 0, pt = 0;
+  for (int i = 0; i < n; i++) {
+    float v = cal.tb[i] / fin, t = cal.tt[i];
+    if (t10 < 0 && v >= 0.1f) t10 = pt + (t - pt) * (0.1f - pv) / fmaxf(v - pv, 1e-3f);
+    if (v >= 0.632f) {
+      t63 = pt + (t - pt) * (0.632f - pv) / fmaxf(v - pv, 1e-3f);
+      break;
+    }
+    pv = v;
+    pt = t;
+  }
+  if (t10 < 0 || t63 <= t10) return;
+  float tau = (t63 - t10) / 0.8946f, d = t10 - 0.1054f * tau;
+  if (tau < 3.0f || tau > 150.0f || d < 0.0f || d > 80.0f) return;
+  cal.dSum += d;
+  cal.tauSum += tau;
+  cal.tCount++;
+}
 void calAutoSolve() {
   float m[2], n[2][3], c[2];
   for (int s = 0; s < 2; s++) {
     m[s] = vnorm(cal.rot[s]);
     if (m[s] < 4.0f) {
       static char msg[96];
-      snprintf(msg, sizeof(msg), "Servo di GPIO%d tidak bergerak (%.1f deg). Cek kabel sinyal/5V/G dan horn.", s == 0 ? 3 : 4, m[s]);
+      snprintf(msg, sizeof(msg), "Servo di GPIO%d tidak bergerak (%.1f derajat). Periksa kabel sinyal, 5V, G, dan horn.", s == 0 ? 3 : 4, m[s]);
       calFail(msg);
       return;
     }
@@ -610,7 +905,7 @@ void calAutoSolve() {
   }
   // roll servo turns the camera about its optical axis, which points ~35 deg down: its axis is closer to vertical
   if (fabsf(c[1] - c[0]) < 0.2f) {
-    calFail("Posisi tidak jelas. Tegakkan dudukan seperti dipakai (kamera menunduk) lalu ulangi.");
+    calFail("Posisi tidak jelas. Tegakkan dudukan seperti saat dipakai (kamera mengarah ke bawah), lalu ulangi.");
     return;
   }
   int rollS = (c[1] >= c[0]) ? 1 : 0;
@@ -619,11 +914,11 @@ void calAutoSolve() {
   // F axis = roll servo rotation axis, pointing down-forward (F . up < 0)
   int iF = argmaxAbs(n[rollS], -1);
   if (fabsf(n[rollS][iF]) < 0.8f) {
-    calFail("IMU tidak sejajar dengan kamera (miring) atau dudukan bergoyang.");
+    calFail("IMU tidak sejajar dengan kamera atau dudukan bergerak saat diukur.");
     return;
   }
   if (fabsf(cal.up[iF]) < 0.12f) {
-    calFail("Kamera harus menunduk minimal 10 derajat saat kalibrasi.");
+    calFail("Saat kalibrasi, kamera harus mengarah minimal 10 derajat ke bawah.");
     return;
   }
   int8_t sF = (cal.up[iF] > 0) ? -1 : 1;
@@ -632,7 +927,7 @@ void calAutoSolve() {
   w[iF] = 0;
   int iU = argmaxAbs(w, iF);
   if (fabsf(w[iU]) < 0.5f) {
-    calFail("Arah atas IMU tidak jelas. Tegakkan dudukan lalu ulangi.");
+    calFail("Arah atas IMU tidak jelas. Tegakkan dudukan, lalu ulangi.");
     return;
   }
   int8_t sU = (w[iU] > 0) ? 1 : -1;
@@ -660,7 +955,9 @@ void calAutoSolve() {
   accAngles(cal.aBefore[rollS], th2, ph2);
   accAngles(cal.aAfter[rollS], th3, ph3);
   float dTh = th1 - th0, dPh = wrap180(ph3 - ph2);
-  float usDegP = CAL_DUS / fmaxf(fabsf(dTh), 0.01f), usDegR = CAL_DUS / fmaxf(fabsf(dPh), 0.01f);
+  // a servo stops at the edge of its dead band, short of the command by about that much
+  float moved = CAL_DUS - cfg.srvDb;
+  float usDegP = moved / fmaxf(fabsf(dTh), 0.01f), usDegR = moved / fmaxf(fabsf(dPh), 0.01f);
   if (usDegP < 6.0f || usDegP > 16.0f || usDegR < 6.0f || usDegR > 16.0f) {
     cfg.axF = oF;
     cfg.axL = oL;
@@ -668,8 +965,8 @@ void calAutoSolve() {
     cfg.sgF = osF;
     cfg.sgL = osL;
     cfg.sgU = osU;
-    static char msg[110];
-    snprintf(msg, sizeof(msg), "Gerak servo tidak wajar (nunduk %.1f, kiri-kanan %.1f deg per 150us). Horn tersangkut / daya kurang?", dTh, dPh);
+    static char msg[128];
+    snprintf(msg, sizeof(msg), "Gerak servo tidak wajar: atas-bawah %.1f, kanan-kiri %.1f derajat. Horn tersangkut atau daya kurang?", dTh, dPh);
     calFail(msg);
     return;
   }
@@ -684,6 +981,11 @@ void calAutoSolve() {
   cfg.dirR = dPh > 0 ? 1 : -1;
   cfg.usDegP = usDegP;
   cfg.usDegR = usDegR;
+  bool timed = cal.tCount >= TIME_STEPS;  // at least half of the 8 steps readable
+  if (timed) {
+    cfg.srvDelay = clampf(cal.dSum / cal.tCount, 0.0f, 60.0f);
+    cfg.srvTau = clampf(cal.tauSum / cal.tCount, 5.0f, 120.0f);
+  }
   cfg.calOK |= 1 | 4;
   if (mode == MODE_CENTER && cfg.startMode == MODE_STAB) mode = MODE_STAB;  // calibrated: start stabilising
   if (mapChanged) {
@@ -693,16 +995,19 @@ void calAutoSolve() {
   }
   cfgSave();
   attitudeReset();
-  cmdP = cmdR = slewP = slewR = outP = outR = 0;
+  controlReset();
   char ax[8];
   axesString(ax, cfg.axF, cfg.sgF, cfg.axL, cfg.sgL, cfg.axU, cfg.sgU);
   sendf(allDest() | cal.src,
         "CAL DONE auto {\"axes\":\"%s\",\"swap\":%d,\"dirp\":%d,\"dirr\":%d,\"usdegp\":%.2f,\"usdegr\":%.2f,"
-        "\"gyrop\":%.1f,\"gyror\":%.1f,\"accp\":%.1f,\"accr\":%.1f,\"align\":%.2f,\"bias\":[%.2f,%.2f,%.2f],\"levelreset\":%d}",
+        "\"gyrop\":%.1f,\"gyror\":%.1f,\"accp\":%.1f,\"accr\":%.1f,\"align\":%.2f,\"bias\":[%.2f,%.2f,%.2f],\"levelreset\":%d,"
+        "\"sdelay\":%.1f,\"stau\":%.1f,\"tsteps\":%d}",
         ax, cfg.swapServo, cfg.dirP, cfg.dirR, cfg.usDegP, cfg.usDegR, m[pitchS], m[rollS], dTh, dPh, pitchAlign,
-        cfg.bias[0], cfg.bias[1], cfg.bias[2], mapChanged ? 1 : 0);
-  event("Kalibrasi otomatis OK: sumbu %s, servo %s, %.1f/%.1f us/deg", ax, cfg.swapServo ? "TERTUKAR (dibetulkan)" : "benar",
+        cfg.bias[0], cfg.bias[1], cfg.bias[2], mapChanged ? 1 : 0, cfg.srvDelay, cfg.srvTau, cal.tCount);
+  event("Kalibrasi otomatis selesai: sumbu %s, kabel servo %s, %.1f/%.1f us per derajat", ax, cfg.swapServo ? "tertukar (sudah dikompensasi)" : "benar",
         cfg.usDegP, cfg.usDegR);
+  if (timed) event("Kecepatan servo: jeda %.0f ms, waktu tanggap %.0f ms", cfg.srvDelay, cfg.srvTau);
+  else event("Kecepatan servo tidak terukur jelas (%d/8 langkah); memakai %.0f/%.0f ms", cal.tCount, cfg.srvDelay, cfg.srvTau);
   cal.kind = CAL_IDLE;
 }
 
@@ -724,14 +1029,14 @@ void calUpdate(float dt) {
         sd = fmaxf(sd, sqrtf(fmaxf(cal.ss[k] / cal.n - mean * mean, 0)));
       }
       if (sd > 0.6f) {
-        calFail("Gimbal bergerak. Letakkan diam lalu ulangi.");
+        calFail("Gimbal bergerak. Letakkan dalam keadaan diam, lalu ulangi.");
         return;
       }
       for (int k = 0; k < 3; k++) cfg.bias[k] = cal.s[k] / cal.n;
       cfg.calOK |= 4;
       cfgSave();
       sendf(allDest() | cal.src, "CAL DONE gyro {\"bias\":[%.3f,%.3f,%.3f],\"noise\":%.3f}", cfg.bias[0], cfg.bias[1], cfg.bias[2], sd);
-      event("Kalibrasi gyro OK (noise %.2f deg/s)", sd);
+      event("Kalibrasi gyro selesai (derau %.2f derajat/s)", sd);
       cal.kind = CAL_IDLE;
     }
     return;
@@ -745,7 +1050,7 @@ void calUpdate(float dt) {
     cal.gMax = fmaxf(cal.gMax, gm);
     if (el >= 1500) {
       if (cal.gMax > 4.0f) {
-        calFail("Kamera bergerak saat diukur. Tahan diam lalu ulangi.");
+        calFail("Kamera bergerak saat diukur. Tahan diam, lalu ulangi.");
         return;
       }
       if (cal.useP) cfg.lvlP = cal.thSum / cal.n - cal.refP;
@@ -754,7 +1059,7 @@ void calUpdate(float dt) {
       cfgSave();
       attitudeReset();
       sendf(allDest() | cal.src, "CAL DONE level {\"lvlp\":%.2f,\"lvlr\":%.2f}", cfg.lvlP, cfg.lvlR);
-      event("Kalibrasi datar OK: koreksi nunduk %.2f, kiri-kanan %.2f deg", cfg.lvlP, cfg.lvlR);
+      event("Kalibrasi datar selesai: koreksi atas-bawah %.2f, kanan-kiri %.2f derajat", cfg.lvlP, cfg.lvlR);
       cal.kind = CAL_IDLE;
     }
     return;
@@ -782,7 +1087,7 @@ void calUpdate(float dt) {
           sd = fmaxf(sd, sqrtf(fmaxf(cal.ss[k] / cal.n - mean * mean, 0)));
         }
         if (sd > 0.6f) {
-          calFail("Gimbal bergerak. Letakkan diam (tegak seperti dipakai) lalu ulangi.");
+          calFail("Gimbal bergerak. Letakkan diam dan tegak seperti saat dipakai, lalu ulangi.");
           return;
         }
         for (int k = 0; k < 3; k++) {
@@ -791,7 +1096,7 @@ void calUpdate(float dt) {
         }
         float un = vnorm(cal.up);
         if (un < 0.85f || un > 1.15f) {
-          calFail("Akselerometer tidak wajar (cek IMU).");
+          calFail("Pembacaan akselerometer tidak wajar. Periksa IMU.");
           return;
         }
         for (int k = 0; k < 3; k++) cal.up[k] /= un;
@@ -840,10 +1145,36 @@ void calUpdate(float dt) {
           cal.servo = 1;
           calPhase(AP_BEFORE);
         } else {
+          cal.servo = 0;
+          cal.dSum = cal.tauSum = 0;
+          cal.tCount = 0;
+          sendf(allDest() | cal.src, "CAL STEP timing");
+          calTimeStart(0);
+        }
+      }
+      break;
+    case AP_TIME: {  // record the camera turning about this servo's axis
+      float m = vnorm(cal.rot[cal.servo]);
+      if (m > 1.0f && cal.tn < 64 && el < 300) {
+        float r = (gyrRaw[0] * cal.rot[cal.servo][0] + gyrRaw[1] * cal.rot[cal.servo][1] + gyrRaw[2] * cal.rot[cal.servo][2]) / m;
+        cal.tth += r * dt;
+        cal.tb[cal.tn] = cal.tth;
+        cal.tt[cal.tn] = el;
+        cal.tn++;
+      }
+      if (el >= (uint32_t)TIME_STEP_MS) {
+        calTimeAnalyse();
+        if (cal.tstep + 1 < TIME_STEPS) {
+          calTimeStart(cal.tstep + 1);
+        } else if (cal.servo == 0) {
+          cal.servo = 1;
+          calTimeStart(0);
+        } else {
           calAutoSolve();
         }
       }
       break;
+    }
   }
 }
 
@@ -884,10 +1215,10 @@ void stepUpdate() {
       capState = 2;
       capDump = -1;
     }
-  } else if (capState == 2) {  // dump a few lines per loop without flooding Bluetooth
+  } else if (capState == 2) {  // dump a few lines per loop without flooding the web clients
     uint8_t dest = allDest() | capSrc;
     for (int k = 0; k < 4; k++) {
-      if ((dest & TO_BLE) && bleConnected && txFree() < 600) return;
+      if (destBusy(dest, 600)) return;
       if (capDump < 0) {
         sendf(dest, "CAPBEGIN %c %.1f %d", capAxis ? 'r' : 'p', capAmp, CAP_N);
         capDump = 0;
@@ -906,6 +1237,17 @@ void stepUpdate() {
 }
 
 // ------------------------------------------------------------------------------------ control
+// Stabilise = feed-forward + PID:
+//  1) body = camera - servo model. Turn the servo to (target - body), predicted ahead by the servo's
+//     delay, so the servo moves at the same moment as the body instead of after the camera has tilted.
+//  2) PID on the camera error mops up what the model gets wrong (servo scale, horn, load) and keeps the
+//     camera exactly on target. I = gain, P = kp, D = ff (gyro rate).
+float pidStep(float &cmd, float e, float rate, float ff, float lim, float dt) {
+  float i = clampf(cmd + (cfg.gain * e - cfg.rateFF * rate) * dt, -lim, lim);
+  float tot = ff + i + cfg.kp * e;
+  if (!((tot > lim && e > 0) || (tot < -lim && e < 0))) cmd = i;  // no wind-up into the end stop
+  return ff + cmd + cfg.kp * e;
+}
 void control(float dt) {
   if (cal.kind == CAL_AUTO) {  // calibration drives the two pins directly
     float tA = cfg.swapServo ? cfg.trimR : cfg.trimP;
@@ -923,27 +1265,30 @@ void control(float dt) {
     nodOffset = 0;
   }
   if (mode == MODE_STAB && imuOK && cal.kind == CAL_IDLE) {
-    float eP = softDB((cfg.pitchSet + nodOffset + stepOffP) - pitchMeas, cfg.deadband);
-    float eR = softDB((cfg.rollSet + stepOffR) - rollMeas, cfg.deadband);
-    // PID on a position servo: I (gain) moves the servo until the camera is exactly on target,
-    // P (kp) reacts immediately, D (rateFF) damps fast motion using the gyro rate.
-    cmdP += (cfg.gain * eP - cfg.rateFF * pitchRate) * dt;
-    cmdR += (cfg.gain * eR - cfg.rateFF * rollRate) * dt;
-    cmdP = clampf(cmdP, -limP, limP);  // anti wind-up
-    cmdR = clampf(cmdR, -limR, limR);
-    float totP = cmdP + cfg.kp * eP, totR = cmdR + cfg.kp * eR;
+    float spP = cfg.pitchSet + nodOffset + stepOffP, spR = cfg.rollSet + stepOffR;
+    float eP = softDB(spP - pitchMeas, cfg.deadband);
+    float eR = softDB(spR - rollMeas, cfg.deadband);
+    float lead = cfg.pred * (cfg.srvDelay + cfg.srvTau + cfg.smooth * 1000.0f) * 1e-3f;
+    float bodyP = pitchMeas - mdlP.m, bodyR = rollMeas - mdlR.m;
+    float bRateP = pitchRate - mdlP.rate, bRateR = rollRate - mdlR.rate;
+    ffP = cfg.ffBody * (spP - bodyP - lead * bRateP);
+    ffR = cfg.ffBody * (spR - bodyR - lead * bRateR);
+    float totP = pidStep(cmdP, eP, pitchRate, ffP, limP, dt);
+    float totR = pidStep(cmdR, eR, rollRate, ffR, limR, dt);
     satP = totP >= limP || totP <= -limP;
     satR = totR >= limR || totR <= -limR;
     tgtP = clampf(totP, -limP, limP);
     tgtR = clampf(totR, -limR, limR);
+    lastTgtP = tgtP;
+    lastTgtR = tgtR;
   } else if (mode == MODE_MANUAL) {
     tgtP = clampf(manP, -limP, limP);
     tgtR = clampf(manR, -limR, limR);
-    cmdP = tgtP;
-    cmdR = tgtR;
+    cmdP = (1.0f - cfg.ffBody) * tgtP;
+    cmdR = (1.0f - cfg.ffBody) * tgtR;
   } else if (mode == MODE_STAB) {  // stabilising but IMU lost / gyro calibration: hold where we are
-    tgtP = cmdP;
-    tgtR = cmdR;
+    tgtP = lastTgtP;
+    tgtR = lastTgtR;
   } else {  // centre / off
     cmdP = cmdR = 0;
   }
@@ -955,8 +1300,10 @@ void control(float dt) {
   float k = dt / (cfg.smooth + dt);
   outP += (slewP - outP) * k;
   outR += (slewR - outR) * k;
-  usP = 1500 + cfg.trimP + cfg.dirP * outP * cfg.usDegP;
-  usR = 1500 + cfg.trimR + cfg.dirR * outR * cfg.usDegR;
+  srvModelStep(mdlP, outP, cfg.usDegP, dt);
+  srvModelStep(mdlR, outR, cfg.usDegR, dt);
+  usP = dbCompApply(dbcP, 1500 + cfg.trimP + cfg.dirP * outP * cfg.usDegP);
+  usR = dbCompApply(dbcR, 1500 + cfg.trimR + cfg.dirR * outR * cfg.usDegR);
   if (mode == MODE_OFF) {
     pwmWriteUs(pinPitch(), 0);
     pwmWriteUs(pinRoll(), 0);
@@ -964,6 +1311,555 @@ void control(float dt) {
     pwmWriteUs(pinPitch(), usP);
     pwmWriteUs(pinRoll(), usR);
   }
+}
+
+// ------------------------------------------------------------------------------------ WiFi + web app
+// The gimbal joins the phone's hotspot (or, when it knows none, starts its own WiFi for the first
+// setup) and serves the app itself: http://<name>.local or its IP. The app then opens a WebSocket on
+// the same address and speaks the same text lines as USB. Up to 3 phones/tablets at once, each with
+// the PIN. Everything here is non-blocking: sends take only what the network can take right now.
+void handleLine(char *line, uint8_t src);
+void newNonce(char *out) {
+  for (int i = 0; i < 16; i++) sprintf(out + 2 * i, "%02x", (unsigned)(esp_random() & 0xFF));
+}
+WiFiServer webServer(80);
+HttpConn http[HTTP_N];
+char hostName[32] = "gimbal-d435", apSsid[33] = "Gimbal-D435";
+bool wifiStarted = false, apOn = false, staUp = false;
+uint32_t staDownSince = 0, staTryAt = 0, apOffAt = 0, wifiPollT = 0;
+uint8_t scanDest = 0;
+
+// --- SHA-1 and base64, only for the WebSocket handshake (RFC 6455)
+void sha1(const uint8_t *d, size_t n, uint8_t out[20]) {
+  uint32_t h[5] = { 0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0 };
+  uint64_t bits = (uint64_t)n * 8;
+  size_t total = ((n + 8) / 64 + 1) * 64;
+  for (size_t off = 0; off < total; off += 64) {
+    uint32_t w[80];
+    for (int i = 0; i < 64; i++) {
+      size_t p = off + i;
+      uint8_t b = p < n ? d[p] : (p == n ? 0x80 : 0);
+      if (p >= total - 8) b = (uint8_t)(bits >> (8 * (total - 1 - p)));
+      if (i % 4 == 0) w[i / 4] = 0;
+      w[i / 4] |= (uint32_t)b << (24 - 8 * (i % 4));
+    }
+    for (int i = 16; i < 80; i++) {
+      uint32_t x = w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16];
+      w[i] = (x << 1) | (x >> 31);
+    }
+    uint32_t a = h[0], b = h[1], c = h[2], e3 = h[3], e4 = h[4];
+    for (int i = 0; i < 80; i++) {
+      uint32_t f, k;
+      if (i < 20) {
+        f = (b & c) | (~b & e3);
+        k = 0x5A827999;
+      } else if (i < 40) {
+        f = b ^ c ^ e3;
+        k = 0x6ED9EBA1;
+      } else if (i < 60) {
+        f = (b & c) | (b & e3) | (c & e3);
+        k = 0x8F1BBCDC;
+      } else {
+        f = b ^ c ^ e3;
+        k = 0xCA62C1D6;
+      }
+      uint32_t t = ((a << 5) | (a >> 27)) + f + e4 + k + w[i];
+      e4 = e3;
+      e3 = c;
+      c = (b << 30) | (b >> 2);
+      b = a;
+      a = t;
+    }
+    h[0] += a;
+    h[1] += b;
+    h[2] += c;
+    h[3] += e3;
+    h[4] += e4;
+  }
+  for (int i = 0; i < 20; i++) out[i] = (uint8_t)(h[i / 4] >> (24 - 8 * (i % 4)));
+}
+void base64(const uint8_t *in, size_t n, char *out) {
+  static const char T[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  size_t j = 0;
+  for (size_t i = 0; i < n; i += 3) {
+    uint32_t v = (uint32_t)in[i] << 16 | (i + 1 < n ? (uint32_t)in[i + 1] << 8 : 0) | (i + 2 < n ? in[i + 2] : 0);
+    out[j++] = T[(v >> 18) & 63];
+    out[j++] = T[(v >> 12) & 63];
+    out[j++] = i + 1 < n ? T[(v >> 6) & 63] : '=';
+    out[j++] = i + 2 < n ? T[v & 63] : '=';
+  }
+  out[j] = 0;
+}
+void wsAcceptKey(const char *key, char out[32]) {
+  char buf[100];
+  snprintf(buf, sizeof(buf), "%s258EAFA5-E914-47DA-95CA-C5AB0DC85B11", key);
+  uint8_t h[20];
+  sha1((const uint8_t *)buf, strlen(buf), h);
+  base64(h, 20, out);
+}
+
+// --- small text helpers
+void hostSlug(const char *name, char *out, size_t cap) {  // "Gimbal D435" -> "gimbal-d435"
+  size_t j = 0;
+  bool dash = false;
+  for (size_t i = 0; name[i] && j + 1 < cap; i++) {
+    char c = tolower((unsigned char)name[i]);
+    if (isalnum((unsigned char)c)) {
+      if (dash && j) out[j++] = '-';
+      if (j + 1 < cap) out[j++] = c;
+      dash = false;
+    } else dash = true;
+  }
+  out[j] = 0;
+  if (!j) strncpy(out, "gimbal", cap);
+}
+void jsonEsc(const char *in, char *out, size_t cap) {
+  size_t j = 0;
+  for (size_t i = 0; in[i] && j + 7 < cap; i++) {
+    unsigned char c = in[i];
+    if (c == '"' || c == '\\') {
+      out[j++] = '\\';
+      out[j++] = c;
+    } else if (c < 0x20) {
+      j += snprintf(out + j, cap - j, "\\u%04x", c);
+    } else out[j++] = c;
+  }
+  out[j] = 0;
+}
+bool hexDecode(const char *hex, char *out, size_t cap) {  // the app sends SSID/password as hex (spaces, symbols)
+  if (!hex) {
+    out[0] = 0;
+    return true;
+  }
+  size_t n = strlen(hex);
+  if (n % 2 || n / 2 >= cap) return false;
+  for (size_t i = 0; i < n / 2; i++) {
+    char b[3] = { hex[2 * i], hex[2 * i + 1], 0 };
+    if (!isxdigit((unsigned char)b[0]) || !isxdigit((unsigned char)b[1])) return false;
+    out[i] = (char)strtol(b, nullptr, 16);
+  }
+  out[n / 2] = 0;
+  return true;
+}
+const char *hdrValue(const char *req, const char *name, char *out, size_t cap) {  // case-insensitive header
+  size_t nl = strlen(name);
+  for (const char *p = strstr(req, "\r\n"); p && p[2]; p = strstr(p + 2, "\r\n")) {
+    const char *h = p + 2;
+    if (strncasecmp(h, name, nl) == 0 && h[nl] == ':') {
+      h += nl + 1;
+      while (*h == ' ') h++;
+      size_t j = 0;
+      while (h[j] && h[j] != '\r' && j + 1 < cap) {
+        out[j] = h[j];
+        j++;
+      }
+      out[j] = 0;
+      return out;
+    }
+  }
+  out[0] = 0;
+  return nullptr;
+}
+int netSend(WiFiClient &c, const void *b, size_t n) {  // never waits: bytes taken (maybe 0), -1 = gone
+  if (!n) return 0;
+  int r = send(c.fd(), b, n, MSG_DONTWAIT);
+  if (r >= 0) return r;
+  return (errno == EAGAIN || errno == EWOULDBLOCK) ? 0 : -1;
+}
+
+// --- WiFi status
+int wifiRssi() {
+  return staUp ? WiFi.RSSI() : 0;
+}
+void wifiStatus(uint8_t dest) {
+  char ss[70], ip[16] = "", apip[16] = "";
+  jsonEsc(cfg.wifiSsid, ss, sizeof(ss));
+  if (staUp) strncpy(ip, WiFi.localIP().toString().c_str(), sizeof(ip) - 1);
+  if (apOn) strncpy(apip, WiFi.softAPIP().toString().c_str(), sizeof(apip) - 1);
+  sendf(dest,
+        "WIFI {\"on\":%d,\"sta\":%d,\"ssid\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,\"ap\":%d,\"apssid\":\"%s\",\"apip\":\"%s\","
+        "\"apn\":%d,\"host\":\"%s\",\"clients\":%d,\"saved\":%d}",
+        cfg.wifiOn, staUp ? 1 : 0, ss, ip, wifiRssi(), apOn ? 1 : 0, apSsid, apip, apOn ? (int)WiFi.softAPgetStationNum() : 0,
+        hostName, wsCount(true), cfg.wifiSsid[0] ? 1 : 0);
+}
+void apStart() {
+  if (apOn) return;
+  WiFi.softAP(apSsid, cfg.apPass, 1, 0, 4);
+  apOn = true;
+  event("WiFi gimbal aktif: %s (sandi %s). Buka http://192.168.4.1", apSsid, cfg.apPass);
+}
+void apStop() {
+  if (!apOn) return;
+  WiFi.softAPdisconnect(true);
+  apOn = false;
+  event("WiFi gimbal dinonaktifkan; memakai hotspot %s", cfg.wifiSsid);
+}
+void staTry() {
+  staTryAt = millis();
+  WiFi.begin(cfg.wifiSsid, cfg.wifiPass);
+}
+void wifiInit() {
+  if (!cfg.wifiOn) {
+    WiFi.mode(WIFI_OFF);
+    return;
+  }
+  uint8_t mac[6];
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.macAddress(mac);
+  snprintf(apSsid, sizeof(apSsid), "Gimbal-D435-%02X%02X", mac[4], mac[5]);  // unique: two gimbals never clash
+  hostSlug(cfg.name, hostName, sizeof(hostName));
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(false);  // retried by wifiPoll, so the setup WiFi stays steady
+  WiFi.setHostname(hostName);
+  WiFi.setSleep(false);                // answers within milliseconds instead of ~100 ms
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);  // less current and heat; also steadier on the C3 Super Mini antenna
+  staDownSince = millis();
+  if (cfg.wifiSsid[0]) staTry();
+  else apStart();
+  webServer.begin();
+  webServer.setNoDelay(true);
+  if (MDNS.begin(hostName)) MDNS.addService("http", "tcp", 80);
+  for (int i = 0; i < WS_N; i++) newNonce(ws[i].nonce);
+  wifiStarted = true;
+}
+// every 250 ms: follow the hotspot, keep the setup WiFi on only while it is needed
+void wifiPoll() {
+  uint32_t now = millis();
+  if (!wifiStarted || (uint32_t)(now - wifiPollT) < 250) return;
+  wifiPollT = now;
+  bool up = WiFi.status() == WL_CONNECTED;
+  if (up && !staUp) {
+    staUp = true;
+    event("Terhubung ke %s. Buka http://%s.local atau http://%s", cfg.wifiSsid, hostName, WiFi.localIP().toString().c_str());
+    if (apOn) apOffAt = now + (WiFi.softAPgetStationNum() ? 120000 : 5000);  // let the setup page show the new address
+    wifiStatus(allDest());
+  } else if (!up && staUp) {
+    staUp = false;
+    staDownSince = now;
+    event("Hotspot %s terputus; mencoba menghubungkan kembali", cfg.wifiSsid);
+    wifiStatus(allDest());
+  }
+  if (staUp && apOn && apOffAt && (int32_t)(now - apOffAt) >= 0) {
+    apOffAt = 0;
+    apStop();
+    WiFi.mode(WIFI_STA);
+  }
+  if (!staUp) {
+    apOffAt = 0;
+    if (!apOn && (uint32_t)(now - staDownSince) > 20000) {  // hotspot not found: open the setup WiFi
+      WiFi.mode(WIFI_AP_STA);
+      apStart();
+    }
+    // retry the hotspot every 15 s, but not while someone is on the setup WiFi (a retry scans all
+    // channels and would make their connection drop)
+    if (cfg.wifiSsid[0] && (uint32_t)(now - staTryAt) > 15000 && !(apOn && WiFi.softAPgetStationNum() > 0)) staTry();
+  }
+  if (scanDest) {
+    int n = WiFi.scanComplete();
+    if (n >= 0 || n == -2) {
+      static char out[1000];
+      size_t j = snprintf(out, sizeof(out), "WIFI LIST [");
+      int shown = 0;
+      for (int i = 0; i < n && shown < 15 && j < sizeof(out) - 90; i++) {
+        String nm = WiFi.SSID(i);
+        if (!nm.length()) continue;
+        bool dup = false;  // the same hotspot seen twice (two bands): keep the first
+        for (int k = 0; k < i && !dup; k++) dup = WiFi.SSID(k) == nm;
+        if (dup) continue;
+        char e[70];
+        jsonEsc(nm.c_str(), e, sizeof(e));
+        j += snprintf(out + j, sizeof(out) - j, "%s{\"s\":\"%s\",\"r\":%d,\"k\":%d}", shown ? "," : "", e, (int)WiFi.RSSI(i),
+                      WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? 0 : 1);
+        shown++;
+      }
+      snprintf(out + j, sizeof(out) - j, "]");
+      sendTo(scanDest, out);
+      WiFi.scanDelete();
+      scanDest = 0;
+    }
+  }
+}
+void wifiCommand(char *a1, char *a2, char *a3, uint8_t src) {
+  char sub[12] = "";
+  if (a1) {
+    strncpy(sub, a1, sizeof(sub) - 1);
+    for (char *p = sub; *p; p++) *p = toupper(*p);
+  }
+  if (!sub[0]) {
+    wifiStatus(src);
+  } else if (!strcmp(sub, "SCAN")) {
+    if (!wifiStarted) return (void)sendTo(src, "ERR WiFi nonaktif");
+    WiFi.scanNetworks(true, false, false, 120);
+    scanDest = src;
+    sendTo(src, "OK WIFI SCAN");
+  } else if (!strcmp(sub, "JOIN")) {
+    char ss[33], pw[65];
+    if (!hexDecode(a2, ss, sizeof(ss)) || !hexDecode(a3, pw, sizeof(pw)) || !ss[0]) {
+      sendTo(src, "ERR WIFI JOIN <nama-hex> <sandi-hex>");
+      return;
+    }
+    if (pw[0] && strlen(pw) < 8) {
+      sendTo(src, "ERR sandi hotspot minimal 8 karakter");
+      return;
+    }
+    strcpy(cfg.wifiSsid, ss);
+    strcpy(cfg.wifiPass, pw);
+    cfgSave();
+    sendTo(src, "OK WIFI JOIN");
+    event("Menghubungkan ke hotspot %s...", ss);
+    if (wifiStarted) {
+      staDownSince = millis();
+      staTry();
+    }
+  } else if (!strcmp(sub, "FORGET")) {
+    cfg.wifiSsid[0] = cfg.wifiPass[0] = 0;
+    cfgSave();
+    sendTo(src, "OK WIFI FORGET");
+    if (wifiStarted) {
+      WiFi.disconnect(false);
+      WiFi.mode(WIFI_AP_STA);
+      apStart();
+    }
+  } else if (!strcmp(sub, "AP")) {
+    char pw[33];
+    if (!hexDecode(a2, pw, sizeof(pw)) || strlen(pw) < 8) {
+      sendTo(src, "ERR sandi WiFi gimbal 8-32 karakter");
+      return;
+    }
+    strcpy(cfg.apPass, pw);
+    cfgSave();
+    sendTo(src, "OK WIFI AP (berlaku saat WiFi gimbal aktif kembali)");
+  } else if (!strcmp(sub, "APOFF")) {
+    if (!staUp) return (void)sendTo(src, "ERR belum terhubung ke hotspot; WiFi gimbal tetap aktif");
+    apOffAt = millis() + 1500;
+    sendTo(src, "OK WIFI APOFF");
+  } else if (!strcmp(sub, "ON") || !strcmp(sub, "OFF")) {
+    if (src != TO_USB) return (void)sendTo(src, "ERR WIFI ON/OFF hanya dapat dikirim lewat kabel USB");
+    cfg.wifiOn = !strcmp(sub, "ON");
+    cfgSave();
+    sendTo(src, "OK, memulai ulang...");
+    rebootAt = millis() + 300;
+  } else {
+    sendTo(src, "ERR WIFI | WIFI SCAN | WIFI JOIN | WIFI FORGET | WIFI AP | WIFI APOFF");
+  }
+  (void)a3;
+}
+
+// --- HTTP: the app's files from flash, gzip, revalidated with ETag
+void wsClose(int i) {
+  WsConn &w = ws[i];
+  bool was = w.authed;
+  w.c.stop();
+  w.c = WiFiClient();
+  w.used = w.authed = false;
+  w.rn = w.ln = w.th = w.tt = w.frN = w.frOff = 0;
+  w.closeAt = 0;
+  newNonce(w.nonce);
+  if (was) event("Aplikasi terputus (%d perangkat masih terhubung)", wsCount(true));
+}
+void httpClose(HttpConn &h) {
+  h.c.stop();
+  h.c = WiFiClient();
+  h.used = false;
+}
+void httpReply(HttpConn &h, const char *status, const char *extra, const uint8_t *body, uint32_t len) {
+  h.hn = snprintf(h.head, sizeof(h.head), "HTTP/1.1 %s\r\n%sContent-Length: %lu\r\nConnection: close\r\n\r\n", status, extra,
+                  (unsigned long)len);
+  h.hoff = 0;
+  h.body = body;
+  h.len = len;
+  h.off = 0;
+}
+void httpRequest(HttpConn &h) {
+  char method[8] = "", path[96] = "", v[80];
+  sscanf(h.req, "%7s %95s", method, path);
+  char *q = strchr(path, '?');
+  if (q) *q = 0;
+  if (!strcmp(path, "/ws") && hdrValue(h.req, "Upgrade", v, sizeof(v)) && strcasecmp(v, "websocket") == 0 &&
+      hdrValue(h.req, "Sec-WebSocket-Key", v, sizeof(v))) {
+    int slot = -1;
+    for (int i = 0; i < WS_N && slot < 0; i++)
+      if (!ws[i].used) slot = i;
+    if (slot < 0) {
+      static const char msg[] = "Sudah 3 perangkat tersambung";
+      httpReply(h, "503 Service Unavailable", "Content-Type: text/plain\r\n", (const uint8_t *)msg, sizeof(msg) - 1);
+      return;
+    }
+    WsConn &w = ws[slot];
+    char acc[32];
+    wsAcceptKey(v, acc);
+    w.c = h.c;  // the connection now belongs to the WebSocket
+    h.c = WiFiClient();
+    h.used = false;
+    w.used = true;
+    w.authed = false;
+    w.rn = w.ln = w.th = w.tt = 0;
+    w.closeAt = 0;
+    w.lastRx = millis();
+    w.frN = snprintf((char *)w.fr, sizeof(w.fr),
+                     "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", acc);
+    w.frOff = 0;
+    return;
+  }
+  if (strcmp(method, "GET") && strcmp(method, "HEAD")) {
+    httpReply(h, "405 Method Not Allowed", "", nullptr, 0);
+    return;
+  }
+  if (!strcmp(path, "/")) strcpy(path, "/index.html");
+  for (int i = 0; i < WEB_FILES_N; i++) {
+    const WebFile &f = WEB_FILES[i];
+    if (strcmp(path, f.path)) continue;
+    char extra[200];
+    snprintf(extra, sizeof(extra), "Content-Type: %s\r\nContent-Encoding: gzip\r\nCache-Control: no-cache\r\nETag: %s\r\n", f.type, f.etag);
+    if (hdrValue(h.req, "If-None-Match", v, sizeof(v)) && !strcmp(v, f.etag)) {
+      snprintf(extra, sizeof(extra), "ETag: %s\r\n", f.etag);
+      httpReply(h, "304 Not Modified", extra, nullptr, 0);
+    } else {
+      httpReply(h, "200 OK", extra, f.data, f.len);
+      if (!strcmp(method, "HEAD")) h.len = 0;
+    }
+    return;
+  }
+  static const char nf[] = "Tidak ada";
+  httpReply(h, "404 Not Found", "Content-Type: text/plain\r\n", (const uint8_t *)nf, sizeof(nf) - 1);
+}
+void httpPoll(HttpConn &h) {
+  if (!h.used) return;
+  if ((uint32_t)(millis() - h.t0) > 15000 || (!h.c.connected() && !h.c.available())) {
+    httpClose(h);
+    return;
+  }
+  if (!h.hn) {  // still reading the request
+    while (h.c.available() && h.rn < sizeof(h.req) - 1) h.req[h.rn++] = (char)h.c.read();
+    h.req[h.rn] = 0;
+    if (strstr(h.req, "\r\n\r\n") || h.rn >= sizeof(h.req) - 1) {
+      httpRequest(h);
+      if (!h.used) return;  // became a WebSocket
+    } else return;
+  }
+  if (h.hoff < h.hn) {
+    int r = netSend(h.c, h.head + h.hoff, h.hn - h.hoff);
+    if (r < 0) return httpClose(h);
+    h.hoff += r;
+    if (h.hoff < h.hn) return;
+  }
+  if (h.off < h.len) {
+    size_t n = h.len - h.off;
+    if (n > 2920) n = 2920;
+    int r = netSend(h.c, h.body + h.off, n);
+    if (r < 0) return httpClose(h);
+    h.off += r;
+  }
+  if (h.off >= h.len) httpClose(h);
+}
+
+// --- WebSocket: one text frame per command line in, frames of whole text out
+void wsPoll(int i) {
+  WsConn &w = ws[i];
+  if (!w.used) return;
+  uint32_t now = millis();
+  if ((w.closeAt && (int32_t)(now - w.closeAt) >= 0) || (uint32_t)(now - w.lastRx) > 20000 ||
+      (!w.c.connected() && !w.c.available())) {  // the app pings every 5 s; 20 s of silence = gone
+    wsClose(i);
+    return;
+  }
+  while (w.c.available() && w.rn < sizeof(w.rx)) w.rx[w.rn++] = (uint8_t)w.c.read();
+  while (w.used && w.rn >= 2) {
+    uint8_t op = w.rx[0] & 0x0F;
+    bool fin = w.rx[0] & 0x80, masked = w.rx[1] & 0x80;
+    uint32_t len = w.rx[1] & 0x7F;
+    size_t hl = 2;
+    if (len == 126) {
+      if (w.rn < 4) break;
+      len = (uint32_t)w.rx[2] << 8 | w.rx[3];
+      hl = 4;
+    } else if (len == 127) {
+      wsClose(i);
+      return;
+    }
+    if (masked) hl += 4;
+    if (hl + len > sizeof(w.rx)) {  // commands are short; anything this big is not from the app
+      wsClose(i);
+      return;
+    }
+    if (w.rn < hl + len) break;
+    uint8_t *pl = w.rx + hl;
+    if (masked)
+      for (uint32_t k = 0; k < len; k++) pl[k] ^= w.rx[hl - 4 + (k & 3)];
+    w.lastRx = now;
+    if (op == 0x8) {
+      wsClose(i);
+      return;
+    }
+    if (op == 0x1 || op == 0x0) {
+      for (uint32_t k = 0; k <= len; k++) {
+        bool end = (k == len) ? fin : (pl[k] == '\n');
+        if (k < len && pl[k] != '\n' && pl[k] != '\r' && w.ln < sizeof(w.line) - 1) w.line[w.ln++] = (char)pl[k];
+        if (end && w.ln) {
+          w.line[w.ln] = 0;
+          w.ln = 0;
+          handleLine(w.line, toWs(i));
+          if (!w.used) return;
+        }
+      }
+    }
+    size_t used = hl + len;
+    memmove(w.rx, w.rx + used, w.rn - used);
+    w.rn -= used;
+  }
+  // send: finish the frame in flight, then pack waiting text into the next one
+  for (int k = 0; k < 4 && w.used; k++) {
+    if (w.frOff >= w.frN) {
+      size_t n = wsUsed(w);
+      if (!n) break;
+      if (n > sizeof(w.fr) - 4) n = sizeof(w.fr) - 4;
+      size_t hl = 2;
+      w.fr[0] = 0x81;
+      if (n < 126) w.fr[1] = (uint8_t)n;
+      else {
+        w.fr[1] = 126;
+        w.fr[2] = (uint8_t)(n >> 8);
+        w.fr[3] = (uint8_t)n;
+        hl = 4;
+      }
+      for (size_t j = 0; j < n; j++) {
+        w.fr[hl + j] = (uint8_t)w.tx[w.tt];
+        w.tt = (w.tt + 1) % WS_TX;
+      }
+      w.frN = hl + n;
+      w.frOff = 0;
+    }
+    int r = netSend(w.c, w.fr + w.frOff, w.frN - w.frOff);
+    if (r < 0) {
+      wsClose(i);
+      return;
+    }
+    w.frOff += r;
+    if (w.frOff < w.frN) break;  // network full: rest next time
+  }
+}
+void netPoll() {
+  if (!wifiStarted) return;
+  wifiPoll();
+  WiFiClient c = webServer.accept();
+  if (c) {
+    int slot = -1;
+    for (int i = 0; i < HTTP_N && slot < 0; i++)
+      if (!http[i].used) slot = i;
+    if (slot < 0) c.stop();  // the browser will retry
+    else {
+      HttpConn &h = http[slot];
+      h.c = c;
+      h.c.setNoDelay(true);
+      h.used = true;
+      h.rn = h.hn = h.hoff = 0;
+      h.req[0] = 0;
+      h.len = h.off = 0;
+      h.t0 = millis();
+    }
+  }
+  for (int i = 0; i < HTTP_N; i++) httpPoll(http[i]);
+  for (int i = 0; i < WS_N; i++) wsPoll(i);
 }
 
 // ------------------------------------------------------------------------------------ messages
@@ -981,12 +1877,18 @@ const char *resetReasonStr(esp_reset_reason_t r) {
     default: return "other";
   }
 }
+int wsIndex(uint8_t src) {  // which web client a single-bit destination is, -1 for USB
+  for (int i = 0; i < WS_N; i++)
+    if (src == toWs(i)) return i;
+  return -1;
+}
 void sendHello(uint8_t dest) {
-  bool needAuth = (dest == TO_BLE) && !bleAuthed;
+  int i = wsIndex(dest);
+  bool needAuth = i >= 0 && !ws[i].authed;
   long lock = 0;
   if ((int32_t)(lockUntil - millis()) > 0) lock = (lockUntil - millis()) / 1000 + 1;
-  sendf(dest, "HELLO {\"fw\":\"%s\",\"name\":\"%s\",\"auth\":%d,\"nonce\":\"%s\",\"lock\":%ld}", FW_VERSION, cfg.name,
-        needAuth ? 1 : 0, nonceHex, lock);
+  sendf(dest, "HELLO {\"fw\":\"%s\",\"name\":\"%s\",\"auth\":%d,\"nonce\":\"%s\",\"lock\":%ld,\"clients\":%d}", FW_VERSION,
+        cfg.name, needAuth ? 1 : 0, i >= 0 ? ws[i].nonce : "", lock, wsCount(false));
 }
 void sendCfg(uint8_t dest) {
   char ax[8];
@@ -995,32 +1897,37 @@ void sendCfg(uint8_t dest) {
         "CFG {\"pitch\":%.2f,\"roll\":%.2f,\"kp\":%.2f,\"gain\":%.2f,\"ff\":%.2f,\"db\":%.2f,\"smooth\":%.3f,\"maxrate\":%.0f,"
         "\"acctau\":%.2f,\"dlpf\":%u,\"autobias\":%u,\"bootgyro\":%u,\"nod\":%u,\"trimp\":%d,\"trimr\":%d,\"dirp\":%d,"
         "\"dirr\":%d,\"swap\":%d,\"usdegp\":%.2f,\"usdegr\":%.2f,\"limp\":%.1f,\"limr\":%.1f,\"lvlp\":%.2f,\"lvlr\":%.2f,"
-        "\"axes\":\"%s\",\"tel\":%d,\"led\":%d,\"startmode\":%d,\"name\":\"%s\",\"cal\":%u,\"defpin\":%d,\"mode\":\"%s\"}",
+        "\"axes\":\"%s\",\"tel\":%d,\"led\":%d,\"startmode\":%d,\"name\":\"%s\",\"cal\":%u,\"defpin\":%d,\"mode\":\"%s\","
+        "\"ffb\":%.2f,\"pred\":%.2f,\"sdelay\":%.1f,\"stau\":%.1f,\"acctauw\":%.2f,\"dbcomp\":%.1f,\"sdb\":%.1f,\"pwmhz\":%u}",
         cfg.pitchSet, cfg.rollSet, cfg.kp, cfg.gain, cfg.rateFF, cfg.deadband, cfg.smooth, cfg.maxRate, cfg.accTau, cfg.dlpf,
         cfg.autoBias, cfg.bootGyro, cfg.nod, cfg.trimP, cfg.trimR, cfg.dirP, cfg.dirR, cfg.swapServo, cfg.usDegP,
         cfg.usDegR, cfg.limP, cfg.limR, cfg.lvlP, cfg.lvlR, ax, cfg.telHz, cfg.ledOn, cfg.startMode, cfg.name, cfg.calOK,
-        strcmp(cfg.pin, DEFAULT_PIN) == 0 ? 1 : 0, MODE_NAMES[mode]);
+        strcmp(cfg.pin, DEFAULT_PIN) == 0 ? 1 : 0, MODE_NAMES[mode], cfg.ffBody, cfg.pred, cfg.srvDelay, cfg.srvTau,
+        cfg.accTauW, cfg.dbComp, cfg.srvDb, (unsigned)cfg.pwmHz);
 }
 void sendStatus(uint8_t dest) {
   sendf(dest,
         "ST {\"fw\":\"%s\",\"up\":%lu,\"hz\":%lu,\"rst\":\"%s\",\"boots\":%lu,\"brown\":%lu,\"imu\":%d,\"who\":\"0x%02X\","
-        "\"addr\":\"0x%02X\",\"i2cerr\":%lu,\"temp\":%.1f,\"bias\":[%.2f,%.2f,%.2f],\"heap\":%lu,\"ble\":%d,\"mtu\":%u,"
-        "\"mode\":\"%s\",\"cal\":\"%s\",\"still\":%d,\"accrej\":%.0f,\"usp\":%.0f,\"usr\":%.0f,\"swap\":%d}",
+        "\"addr\":\"0x%02X\",\"i2cerr\":%lu,\"temp\":%.1f,\"bias\":[%.2f,%.2f,%.2f],\"heap\":%lu,\"clients\":%d,\"rssi\":%d,"
+        "\"mode\":\"%s\",\"cal\":\"%s\",\"still\":%d,\"accrej\":%.0f,\"usp\":%.0f,\"usr\":%.0f,\"swap\":%d,"
+        "\"walk\":%.2f,\"ffp\":%.2f,\"ffr\":%.2f,\"ip\":%.2f,\"ir\":%.2f}",
         FW_VERSION, (unsigned long)(millis() / 1000), (unsigned long)loopHz, resetReasonStr(rstReason),
         (unsigned long)bootCount, (unsigned long)brownCount, imuOK ? 1 : 0, imuWho, imuAddr, (unsigned long)i2cErr,
         temperatureRead(), cfg.bias[0], cfg.bias[1], cfg.bias[2], (unsigned long)ESP.getFreeHeap(),
-        bleConnected ? (bleAuthed ? 2 : 1) : 0, bleMtu, MODE_NAMES[mode], CAL_NAMES[cal.kind], isStill ? 1 : 0,
-        accRejPct, usP, usR, cfg.swapServo);
+        wsCount(true), wifiRssi(), MODE_NAMES[mode], CAL_NAMES[cal.kind], isStill ? 1 : 0,
+        accRejPct, usP, usR, cfg.swapServo, walkF, ffP, ffR, cmdP, cmdR);
 }
 void sendHelp(uint8_t dest) {
   static const char *lines[] = {
     "HELP perintah:",
     "HELP GET | STATUS | EVLOG | PING | HELLO",
     "HELP SET <kunci> <nilai>   (pitch roll kp gain ff db smooth maxrate acctau dlpf autobias bootgyro nod",
-    "HELP     trimp trimr dirp dirr swap usdegp usdegr limp limr lvlp lvlr axes tel led startmode)",
-    "HELP MODE stab|center|manual|off   MAN <nunduk> <kirikanan>",
-    "HELP CAL auto | CAL gyro | CAL level [nunduk|x] [kirikanan|x] | CAL abort",
+    "HELP     trimp trimr dirp dirr swap usdegp usdegr limp limr lvlp lvlr axes tel led startmode",
+    "HELP     ffb pred sdelay stau sdb dbcomp acctauw pwmhz)",
+    "HELP MODE stab|center|manual|off   MAN <atas-bawah> <kanan-kiri>",
+    "HELP CAL auto | CAL gyro | CAL level [atas-bawah|x] [kanan-kiri|x] | CAL abort",
     "HELP STEP p|r <derajat>   SAVE   DEFAULTS tuning|all   PIN <baru>   NAME <nama>   REBOOT",
+    "HELP WIFI | WIFI SCAN | WIFI JOIN <ssid-hex> <sandi-hex> | WIFI FORGET | WIFI AP <sandi-hex> | WIFI APOFF | WIFI ON|OFF",
   };
   for (auto l : lines) sendTo(dest, l);
 }
@@ -1048,6 +1955,13 @@ bool setParam(const char *key, const char *val, char *err, size_t errLen) {
   F_("smooth", smooth, 0.0f, 0.3f)
   F_("maxrate", maxRate, 30.0f, 800.0f)
   F_("acctau", accTau, 0.1f, 5.0f)
+  F_("ffb", ffBody, 0.0f, 1.0f)
+  F_("pred", pred, 0.0f, 1.5f)
+  F_("sdelay", srvDelay, 0.0f, 60.0f)
+  F_("stau", srvTau, 5.0f, 120.0f)
+  F_("acctauw", accTauW, 0.3f, 10.0f)
+  F_("dbcomp", dbComp, 0.0f, 10.0f)
+  F_("sdb", srvDb, 0.0f, 20.0f)
   I_("autobias", autoBias, 0, 1)
   I_("bootgyro", bootGyro, 0, 1)
   I_("nod", nod, 0, 1)
@@ -1065,6 +1979,11 @@ bool setParam(const char *key, const char *val, char *err, size_t errLen) {
   I_("startmode", startMode, 0, 3)
 #undef F_
 #undef I_
+  if (!strcmp(key, "pwmhz")) {
+    cfg.pwmHz = (uint16_t)clampf((float)iv, 50, 333);
+    pwmSetHz(cfg.pwmHz);
+    return true;
+  }
   if (!strcmp(key, "dlpf")) {
     cfg.dlpf = (uint8_t)clampf((float)iv, 0, 6);
     if (imuOK) mpuWrite(0x1A, cfg.dlpf);
@@ -1109,26 +2028,26 @@ bool setParam(const char *key, const char *val, char *err, size_t errLen) {
 }
 
 // ------------------------------------------------------------------------------------ command handler
-void newNonce() {
-  for (int i = 0; i < 16; i++) sprintf(nonceHex + 2 * i, "%02x", (unsigned)(esp_random() & 0xFF));
-}
 void handleAuth(const char *hex, uint8_t src) {
-  if (src == TO_USB) {
+  int wi = wsIndex(src);
+  if (wi < 0) {  // USB: the cable itself is the key
     sendTo(src, "AUTH OK");
     return;
   }
+  WsConn &w = ws[wi];
   uint32_t now = millis();
   if ((int32_t)(lockUntil - now) > 0) {
-    sendf(TO_BLE, "AUTH LOCKED %lu", (unsigned long)((lockUntil - now) / 1000 + 1));
+    sendf(src, "AUTH LOCKED %lu", (unsigned long)((lockUntil - now) / 1000 + 1));
     return;
   }
   char expect[65];
-  authHash(nonceHex, cfg.pin, expect);
+  authHash(w.nonce, cfg.pin, expect);
   if (hex && strlen(hex) == 64 && strcasecmp(hex, expect) == 0) {
-    bleAuthed = true;
+    w.authed = true;
     authFails = 0;
-    sendTo(TO_BLE, "AUTH OK");
-    event("Bluetooth tersambung, sandi benar");
+    sendTo(src, "AUTH OK");
+    sendCfg(src);
+    event("Aplikasi terhubung lewat WiFi, sandi benar (%d perangkat)", wsCount(true));
     if (cfg.nod && mode == MODE_STAB) {  // small nod: physical "connected" sign
       nodOffset = 4.0f;
       nodUntil = millis() + 400;
@@ -1136,16 +2055,16 @@ void handleAuth(const char *hex, uint8_t src) {
     }
   } else {
     authFails++;
-    newNonce();
+    newNonce(w.nonce);
     if (authFails >= 5) {
       authFails = 0;
       lockUntil = now + 30000;
-      sendTo(TO_BLE, "AUTH LOCKED 30");
-      event("5x sandi salah lewat Bluetooth: dikunci 30 detik");
-      disconnectAt = now + 400;
-      if (disconnectAt == 0) disconnectAt = 1;
+      sendTo(src, "AUTH LOCKED 30");
+      event("Sandi salah 5 kali lewat WiFi: dikunci 30 detik");
+      w.closeAt = now + 400;
+      if (w.closeAt == 0) w.closeAt = 1;
     } else {
-      sendf(TO_BLE, "AUTH FAIL %d %s", 5 - authFails, nonceHex);
+      sendf(src, "AUTH FAIL %d %s", 5 - authFails, w.nonce);
     }
   }
 }
@@ -1167,7 +2086,8 @@ void handleLine(char *line, uint8_t src) {
     sendf(src, "PONG %lu", (unsigned long)millis());
     return;
   }
-  bool authed = (src == TO_USB) || bleAuthed;
+  int wi = wsIndex(src);
+  bool authed = wi < 0 || ws[wi].authed;
   if (!authed) {
     sendTo(src, "ERR AUTH");
     return;
@@ -1219,20 +2139,20 @@ void handleLine(char *line, uint8_t src) {
       manP = outP;
       manR = outR;
     }
-    if (m == MODE_STAB && mode != MODE_STAB) {
-      cmdP = outP;
-      cmdR = outR;
+    if (m == MODE_STAB && mode != MODE_STAB) {  // continue smoothly from where the servos are
+      cmdP = (1.0f - cfg.ffBody) * outP;
+      cmdR = (1.0f - cfg.ffBody) * outR;
     }
     mode = (Mode)m;
     if (m == MODE_STAB && !(cfg.calOK & 1)) sendTo(src, "WARN belum dikalibrasi: arah servo/IMU bisa salah. Jalankan CAL auto.");
     sendCfg(allDest() | src);
   } else if (!strcmp(cmd, "MAN")) {
     if (!a1 || !a2) {
-      sendTo(src, "ERR MAN <nunduk> <kirikanan>");
+      sendTo(src, "ERR MAN <atas-bawah> <kanan-kiri>");
       return;
     }
     if (mode != MODE_MANUAL) {
-      sendTo(src, "ERR pindah ke MODE manual dulu");
+      sendTo(src, "ERR pindah ke MODE manual terlebih dahulu");
       return;
     }
     manP = clampf(atof(a1), -cfg.limP, cfg.limP);
@@ -1253,13 +2173,13 @@ void handleLine(char *line, uint8_t src) {
       return;
     }
     if (!imuOK) {
-      sendTo(src, "ERR IMU tidak terbaca, cek 4 kabel IMU");
+      sendTo(src, "ERR IMU tidak terbaca; periksa keempat kabel IMU");
       return;
     }
     if (!strcmp(a1, "gyro")) {
       calStart(CAL_GYRO, src);
     } else if (!strcmp(a1, "level")) {
-      // CAL level <nunduk terbaca|x> <kiri-kanan terbaca|x>   (x = jangan ubah sumbu itu)
+      // CAL level <atas-bawah terbaca|x> <kanan-kiri terbaca|x>   (x = jangan ubah sumbu itu)
       calStart(CAL_LEVEL, src);
       cal.useP = !(a2 && tolower(a2[0]) == 'x');
       cal.useR = !(a3 && tolower(a3[0]) == 'x');
@@ -1267,7 +2187,7 @@ void handleLine(char *line, uint8_t src) {
       cal.refR = (a3 && cal.useR) ? atof(a3) : 0.0f;
     } else if (!strcmp(a1, "auto")) {
       if (mode == MODE_OFF) {
-        sendTo(src, "ERR servo mati (MODE off). Pilih mode lain dulu");
+        sendTo(src, "ERR servo nonaktif (MODE off). Pilih mode lain terlebih dahulu");
         return;
       }
       calStart(CAL_AUTO, src);
@@ -1275,7 +2195,7 @@ void handleLine(char *line, uint8_t src) {
     } else sendTo(src, "ERR CAL auto|gyro|level|abort");
   } else if (!strcmp(cmd, "STEP")) {
     if (mode != MODE_STAB || !imuOK || cal.kind != CAL_IDLE || capState) {
-      sendTo(src, "ERR uji respons hanya di mode stab, tanpa kalibrasi berjalan");
+      sendTo(src, "ERR uji respons hanya dapat dijalankan dalam mode stab, saat tidak ada kalibrasi");
       return;
     }
     uint8_t ax = (a1 && tolower(a1[0]) == 'r') ? 1 : 0;
@@ -1307,11 +2227,14 @@ void handleLine(char *line, uint8_t src) {
       cfg.sgU = keep.sgU;
       cfg.lvlP = keep.lvlP;
       cfg.lvlR = keep.lvlR;
+      cfg.srvDelay = keep.srvDelay;  // measured by CAL auto
+      cfg.srvTau = keep.srvTau;
+      cfg.srvDb = keep.srvDb;
       memcpy(cfg.bias, keep.bias, sizeof(cfg.bias));
     }
     cfgSave();
     attitudeReset();
-    event("Pengaturan dikembalikan ke bawaan (%s)", all ? "semua" : "tuning");
+    event("Pengaturan dikembalikan ke nilai bawaan (%s)", all ? "semua" : "tuning");
     sendCfg(allDest() | src);
   } else if (!strcmp(cmd, "FACTORY")) {
     if (src != TO_USB) {
@@ -1320,11 +2243,11 @@ void handleLine(char *line, uint8_t src) {
     }
     cfgDefaults(cfg, false);
     cfgSave();
-    sendTo(src, "OK FACTORY, restart...");
+    sendTo(src, "OK FACTORY, memulai ulang...");
     rebootAt = millis() + 300;
   } else if (!strcmp(cmd, "PIN")) {
     if (!a1) {
-      sendTo(src, "ERR PIN <sandi baru 4-12 huruf/angka>");
+      sendTo(src, "ERR PIN <sandi baru, 4-12 huruf atau angka>");
       return;
     }
     size_t n = strlen(a1);
@@ -1332,17 +2255,17 @@ void handleLine(char *line, uint8_t src) {
     for (size_t i = 0; i < n && ok; i++)
       if (!isalnum((unsigned char)a1[i])) ok = false;
     if (!ok) {
-      sendTo(src, "ERR sandi harus 4-12 huruf/angka");
+      sendTo(src, "ERR sandi harus 4-12 huruf atau angka");
       return;
     }
     strncpy(cfg.pin, a1, sizeof(cfg.pin) - 1);
     cfg.pin[sizeof(cfg.pin) - 1] = 0;
     cfgSave();
     sendTo(src, "OK PIN");
-    event("Sandi Bluetooth diganti");
+    event("Sandi aplikasi diganti");
   } else if (!strcmp(cmd, "NAME")) {
     if (!a1) {
-      sendTo(src, "ERR NAME <nama, maks 20, tanpa spasi pakai _>");
+      sendTo(src, "ERR NAME <nama, maksimal 20 karakter, spasi ditulis _>");
       return;
     }
     char nm[24];
@@ -1358,7 +2281,11 @@ void handleLine(char *line, uint8_t src) {
     }
     strcpy(cfg.name, nm);
     cfgSave();
-    sendf(src, "OK NAME %s (berlaku setelah restart)", cfg.name);
+    char host[32];
+    hostSlug(cfg.name, host, sizeof(host));
+    sendf(src, "OK NAME %s (berlaku setelah dinyalakan ulang: http://%s.local)", cfg.name, host);
+  } else if (!strcmp(cmd, "WIFI")) {
+    wifiCommand(a1, a2, a3, src);
   } else if (!strcmp(cmd, "REBOOT")) {
     if (saveAt) cfgSave();
     sendTo(src, "OK REBOOT");
@@ -1368,89 +2295,10 @@ void handleLine(char *line, uint8_t src) {
   }
 }
 
-// ------------------------------------------------------------------------------------ Bluetooth
-class SrvCB : public BLEServerCallbacks {
-  void onConnect(BLEServer *s) override {
-    bleConnected = true;
-    bleJustConnected = true;
-  }
-  void onDisconnect(BLEServer *s) override {
-    bleConnected = false;
-    bleJustDisconnected = true;
-  }
-};
-class RxCB : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic *c) override {
-    auto v = c->getValue();
-    for (size_t i = 0; i < v.length(); i++) {
-      char ch = v[i];
-      if (bleRxQ) xQueueSend(bleRxQ, &ch, 0);
-    }
-  }
-};
-void bleInit() {
-  bleRxQ = xQueueCreate(768, sizeof(char));
-  BLEDevice::init(cfg.name);
-  BLEDevice::setMTU(247);
-  bleServer = BLEDevice::createServer();
-  bleServer->setCallbacks(new SrvCB());
-  BLEService *svc = bleServer->createService(NUS_SERVICE);
-  bleTx = svc->createCharacteristic(NUS_TX, BLECharacteristic::PROPERTY_NOTIFY);
-#if defined(CONFIG_BLUEDROID_ENABLED)
-  bleTx->addDescriptor(new BLE2902());
-#endif
-  BLECharacteristic *rx = svc->createCharacteristic(NUS_RX, BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
-  rx->setCallbacks(new RxCB());
-  svc->start();
-  BLEAdvertising *adv = BLEDevice::getAdvertising();
-  adv->addServiceUUID(NUS_SERVICE);
-  adv->setScanResponse(true);
-  BLEDevice::startAdvertising();
-  newNonce();
-}
-void bleHousekeeping() {
-  if (bleJustConnected) {
-    bleJustConnected = false;
-    bleAuthed = false;
-    bleMtu = 23;
-    txH = txT = 0;
-    newNonce();
-  }
-  if (bleJustDisconnected) {
-    bleJustDisconnected = false;
-    bool was = bleAuthed;
-    bleAuthed = false;
-    txH = txT = 0;
-    BLEDevice::startAdvertising();
-    if (was) event("Bluetooth terputus");
-  }
-  if (disconnectAt && (int32_t)(millis() - disconnectAt) >= 0) {
-    disconnectAt = 0;
-    if (bleConnected && bleServer) bleServer->disconnect(bleServer->getConnId());
-  }
-}
-void blePump() {
-  static uint32_t last = 0;
-  if (!bleConnected || !bleTx) return;
-  uint32_t now = micros();
-  if ((uint32_t)(now - last) < 7500) return;
-  last = now;
-  size_t used = txUsed();
-  if (!used) return;
-  size_t chunk = (size_t)bleMtu - 3;
-  if (chunk > 180) chunk = 180;
-  if (chunk > used) chunk = used;
-  uint8_t buf[184];
-  for (size_t i = 0; i < chunk; i++) {
-    buf[i] = (uint8_t)txRing[txT];
-    txT = (txT + 1) % sizeof(txRing);
-  }
-  bleTx->setValue(buf, chunk);
-  bleTx->notify();
-}
+// ------------------------------------------------------------------------------------ USB input
 void pollInputs() {
-  static char ub[200], bb[200];
-  static uint8_t un = 0, bn = 0;
+  static char ub[200];
+  static uint8_t un = 0;
   while (Serial.available() > 0) {
     char c = (char)Serial.read();
     if (c == '\r') continue;
@@ -1459,15 +2307,6 @@ void pollInputs() {
       if (un) handleLine(ub, TO_USB);
       un = 0;
     } else if (un < sizeof(ub) - 1) ub[un++] = c;
-  }
-  char c;
-  while (bleRxQ && xQueueReceive(bleRxQ, &c, 0) == pdTRUE) {
-    if (c == '\r') continue;
-    if (c == '\n') {
-      bb[bn] = 0;
-      if (bn) handleLine(bb, TO_BLE);
-      bn = 0;
-    } else if (bn < sizeof(bb) - 1) bb[bn++] = c;
   }
 }
 
@@ -1481,9 +2320,11 @@ void ledUpdate() {
   bool on;
   if (!imuOK) on = (t / 125) % 2;
   else if (cal.kind != CAL_IDLE || capState) on = (t / 250) % 2;
-  else if (bleConnected && bleAuthed) on = true;
-  else if (bleConnected) on = (t / 500) % 2;
-  else on = (t % 2000) < 60;
+  else if (wsCount(true)) on = true;
+  else if (wsCount(false)) on = (t / 500) % 2;
+  else if (staUp) on = (t % 2000) < 60;
+  else if (apOn) on = (t % 2000) < 60 || ((t % 2000) >= 200 && (t % 2000) < 260);
+  else on = (t % 1000) < 60;
   digitalWrite(PIN_LED, on ? LOW : HIGH);
 }
 void telemetry() {
@@ -1492,9 +2333,10 @@ void telemetry() {
   if ((uint32_t)(now - telT) < 1000u / cfg.telHz) return;
   telT = now;
   uint8_t dest = allDest();
-  if ((dest & TO_BLE) && txUsed() > sizeof(txRing) / 3) dest &= ~TO_BLE;  // Bluetooth busy: skip one
-  uint8_t flags = (imuOK ? 1 : 0) | (bleAuthed ? 2 : 0) | (isStill ? 4 : 0) | (satP ? 8 : 0) | (satR ? 16 : 0) |
-                  (cal.kind != CAL_IDLE ? 32 : 0) | (accRejPct > 50 ? 64 : 0);
+  for (int i = 0; i < WS_N; i++)  // a phone that is behind skips this sample instead of falling further behind
+    if ((dest & toWs(i)) && wsUsed(ws[i]) > WS_TX / 3) dest &= ~toWs(i);
+  uint8_t flags = (imuOK ? 1 : 0) | (wsCount(true) ? 2 : 0) | (isStill ? 4 : 0) | (satP ? 8 : 0) | (satR ? 16 : 0) |
+                  (cal.kind != CAL_IDLE ? 32 : 0) | (accRejPct > 50 ? 64 : 0) | (walkF > 0.5f ? 128 : 0);
   sendf(dest, "T,%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.1f,%.1f,%u,%u", (unsigned long)now, pitchMeas, rollMeas,
         cfg.pitchSet + nodOffset + stepOffP, cfg.rollSet + stepOffR, outP, outR, pitchRate, rollRate, (unsigned)mode, flags);
 }
@@ -1535,6 +2377,8 @@ void setup() {
     cfgDefaults(cfg, false);
     cfgSave();
     firstBoot = true;
+  } else if (cfgMigrated) {
+    cfgSave();
   }
   rstReason = esp_reset_reason();
   bootCount = prefs.getUInt("boots", 0) + 1;
@@ -1557,7 +2401,7 @@ void setup() {
   Wire.begin(PIN_SDA, PIN_SCL, 100000);  // 100 kHz: robust over the long moving IMU wires
   Wire.setTimeOut(10);
   imuOK = mpuInit();
-  bleInit();
+  wifiInit();
   if (imuOK) {
     delay(100);
     if (cfg.bootGyro) bootGyro();
@@ -1568,18 +2412,19 @@ void setup() {
     attitudeReset();
   }
   softStartUntil = millis() + 2500;
-  event("Menyala (fw %s). Restart karena: %s. Restart tegangan turun total: %lu", FW_VERSION, resetReasonStr(rstReason),
+  event("Menyala (fw %s). Penyebab mulai ulang: %s. Total mulai ulang karena tegangan turun: %lu", FW_VERSION, resetReasonStr(rstReason),
         (unsigned long)brownCount);
-  if (!imuOK) event("IMU tidak terbaca: cek VCC->3V3, GND->G, SDA->GPIO6, SCL->GPIO7");
-  if (!(cfg.calOK & 1)) event("Belum dikalibrasi: servo ditahan di tengah. Jalankan Kalibrasi Otomatis.");
+  if (cfgMigrated) event("Pengaturan dari firmware 4.0 tetap dipakai; pengaturan baru diisi nilai bawaan");
+  if (!imuOK) event("IMU tidak terbaca: periksa VCC->3V3, GND->G, SDA->GPIO6, SCL->GPIO7");
+  if (!(cfg.calOK & 1)) event("Belum dikalibrasi: servo ditahan di tengah. Jalankan kalibrasi otomatis.");
+  if (!cfg.wifiOn) event("WiFi nonaktif (kirim WIFI ON lewat USB untuk mengaktifkan)");
   lastLoopUs = micros();
   statT = millis();
 }
 
 void loop() {
   pollInputs();
-  bleHousekeeping();
-  blePump();
+  netPoll();
   uint32_t nowUs = micros();
   if ((uint32_t)(nowUs - lastLoopUs) < LOOP_US) return;
   float dt = (nowUs - lastLoopUs) * 1e-6f;
@@ -1603,7 +2448,7 @@ void loop() {
     if (imuFailRun == 20 && imuOK) {
       imuOK = false;
       if (cal.kind != CAL_IDLE) calFail("IMU berhenti menjawab");
-      event("IMU ERROR: tidak menjawab. Servo ditahan. Cek 4 kabel IMU.");
+      event("IMU ERROR: tidak merespons. Servo ditahan. Periksa keempat kabel IMU.");
     }
     if (!imuOK && imuFailRun % 200 == 0) {  // try again every second
       Wire.end();
@@ -1625,10 +2470,6 @@ void loop() {
     accRejPct = accCount ? 100.0f * accRejCount / accCount : 0;
     accCount = accRejCount = 0;
     statT = now;
-    if (bleConnected && bleServer) {
-      uint16_t m = bleServer->getPeerMTU(bleServer->getConnId());
-      bleMtu = (m >= 23 && m <= 517) ? m : 23;
-    }
   }
   if (saveAt && (int32_t)(now - saveAt) >= 0) cfgSave();
   if (rebootAt && (int32_t)(now - rebootAt) >= 0) ESP.restart();
