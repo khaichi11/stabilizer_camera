@@ -290,7 +290,7 @@ body.demo .demochip{display:inline-block}
       <div class="card">
         <header><h2>Selisih dari target, 10 detik</h2></header>
         <canvas class="chart" id="liveChart" width="900" height="170"></canvas>
-        <div class="legend"><span><i style="background:#E9EDF1"></i>selisih nunduk</span><span><i style="background:#FFB21E"></i>kiri-kanan</span><span><i style="background:#FF5D52"></i>servo di batas</span></div>
+        <div class="legend"><span><i style="background:#ECEEF1"></i>nunduk</span><span><i style="background:#F2AE2E"></i>kiri-kanan</span><span><i style="background:#E5534B"></i>servo di batas</span></div>
       </div>
     </div>
 
@@ -367,6 +367,7 @@ body.demo .demochip{display:inline-block}
         <header><h2>Uji respons</h2><p>Bagus: naik &lt; 400 ms, lewat target &lt; 15%.</p></header>
         <div class="row"><button class="btn" id="stepP">Uji nunduk +5°</button><button class="btn" id="stepR">Uji kiri-kanan +5°</button><button class="btn ghost" id="stepCsv" disabled>Unduh CSV</button></div>
         <canvas class="chart" id="stepChart" width="900" height="170"></canvas>
+        <div class="legend"><span><i style="background:#ECEEF1"></i>sudut kamera</span><span><i style="background:#6B737C"></i>target</span></div>
         <div class="metrics" id="stepMetrics"><span>Belum ada data.</span></div>
       </div>
       <div class="row"><button class="btn ghost" id="defTuning">Kembalikan PID bawaan</button></div>
@@ -894,20 +895,28 @@ function explain(d) {
   else if (d.mode === 1) w = "Mode Tengah: servo diam.";
   $("#chWarn").textContent = w; $("#chWarn").hidden = !w;
 }
+function fitCanvas(cv) {
+  const r = cv.getBoundingClientRect(), dpr = Math.min(3, window.devicePixelRatio || 1);
+  const w = Math.max(1, Math.round(r.width)), h = Math.max(1, Math.round(r.height));
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+  return { ctx, W: w, H: h };
+}
+const CHART_FONT = '500 11px "Inter", system-ui, sans-serif';
 function drawLive() {
-  const cv = $("#liveChart"), ctx = cv.getContext("2d"), W = cv.width, H = cv.height;
-  ctx.clearRect(0, 0, W, H); if (S.tel.length < 2) return;
+  const { ctx, W, H } = fitCanvas($("#liveChart")); if (S.tel.length < 2) return;
   const t1 = S.tel[S.tel.length - 1].t, t0 = t1 - 10000;
   let mx = 2; for (const d of S.tel) mx = Math.max(mx, Math.abs(d.p - d.sp) + 0.5, Math.abs(d.r - d.sr) + 0.5);
   mx = Math.min(30, Math.ceil(mx));
-  const X = (t) => (t - t0) / 10000 * W, Y = (v) => H / 2 - v / mx * (H / 2 - 14);
+  const X = (t) => (t - t0) / 10000 * W, Y = (v) => H / 2 - v / mx * (H / 2 - 10);
   ctx.strokeStyle = "#232931"; ctx.lineWidth = 1;
   for (let g = -mx; g <= mx; g += Math.max(1, Math.round(mx / 4))) { ctx.beginPath(); ctx.moveTo(0, Y(g)); ctx.lineTo(W, Y(g)); ctx.stroke(); }
   ctx.strokeStyle = "#3A434E"; ctx.beginPath(); ctx.moveTo(0, Y(0)); ctx.lineTo(W, Y(0)); ctx.stroke();
-  ctx.fillStyle = "#6E7882"; ctx.font = "22px system-ui, sans-serif"; ctx.fillText("±" + mx + "°", 10, 26);
+  ctx.fillStyle = "#6B737C"; ctx.font = CHART_FONT; ctx.fillText("+" + mx + "°", 6, 13); ctx.fillText("−" + mx + "°", 6, H - 5);
   const line = (fn, col, w) => { ctx.beginPath(); ctx.strokeStyle = col; ctx.lineWidth = w; S.tel.forEach((d, i) => { const x = X(d.t), y = Y(fn(d)); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke(); };
-  line((d) => d.r - d.sr, "#FFB21E", 3); line((d) => d.p - d.sp, "#E9EDF1", 3);
-  ctx.fillStyle = "#FF5D52"; for (const d of S.tel) if (d.flags & 24) ctx.fillRect(X(d.t) - 2, H - 8, 4, 6);
+  ctx.lineJoin = "round";
+  line((d) => d.r - d.sr, "#F2AE2E", 2); line((d) => d.p - d.sp, "#ECEEF1", 2);
+  ctx.fillStyle = "#E5534B"; for (const d of S.tel) if (d.flags & 24) ctx.fillRect(X(d.t) - 1.5, H - 5, 3, 4);
 }
 
 // ======================================================================== settings binding
@@ -999,13 +1008,12 @@ function onCapEnd() {
 }
 function drawStep() {
   const c = S.lastCap; if (!c) return;
-  const cv = $("#stepChart"), ctx = cv.getContext("2d"), W = cv.width, H = cv.height, rows = c.rows, idx = c.axis === "r" ? [4, 5] : [2, 3];
+  const { ctx, W, H } = fitCanvas($("#stepChart")), rows = c.rows, idx = c.axis === "r" ? [4, 5] : [2, 3];
   const vals = rows.flatMap((r) => [r[idx[0]] / 100, r[idx[1]] / 100]), lo = Math.min(...vals) - 0.5, hi = Math.max(...vals) + 0.5, tmax = rows[rows.length - 1][1];
-  const X = (t) => t / tmax * W, Y = (v) => H - 12 - (v - lo) / (hi - lo) * (H - 24);
-  ctx.clearRect(0, 0, W, H); ctx.strokeStyle = "#232931"; for (let t = 0; t <= tmax; t += 500) { ctx.beginPath(); ctx.moveTo(X(t), 0); ctx.lineTo(X(t), H); ctx.stroke(); }
+  const X = (t) => t / tmax * W, Y = (v) => H - 8 - (v - lo) / (hi - lo) * (H - 16);
+  ctx.strokeStyle = "#232931"; ctx.lineWidth = 1; ctx.lineJoin = "round"; for (let t = 0; t <= tmax; t += 500) { ctx.beginPath(); ctx.moveTo(X(t), 0); ctx.lineTo(X(t), H); ctx.stroke(); }
   const ln = (i, col, w) => { ctx.beginPath(); ctx.strokeStyle = col; ctx.lineWidth = w; rows.forEach((r, k) => { const x = X(r[1]), y = Y(r[i] / 100); k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke(); };
-  ln(idx[0], "#6E7882", 2); ln(idx[1], c.axis === "r" ? "#FFB21E" : "#E9EDF1", 3);
-  ctx.fillStyle = "#6E7882"; ctx.font = "22px system-ui, sans-serif"; ctx.fillText((c.axis === "r" ? "kiri-kanan" : "nunduk") + ": abu-abu = target", 10, 26);
+  ln(idx[0], "#6B737C", 1.5); ln(idx[1], c.axis === "r" ? "#F2AE2E" : "#ECEEF1", 2);
 }
 $("#stepP").onclick = () => send("STEP p 5");
 $("#stepR").onclick = () => send("STEP r 5");
@@ -1073,6 +1081,7 @@ function setView(x) { $("#viewSolid").setAttribute("aria-pressed", !x); $("#view
 $("#viewSolid").onclick = () => setView(false);
 $("#viewXray").onclick = () => setView(true);
 supportNote();
+window.addEventListener("resize", () => { drawLive(); drawStep(); });
 fetch("skema_rangkaian.svg").then((r) => (r.ok ? r.text() : Promise.reject())).then((svg) => { $("#schemHost").innerHTML = svg; const s = $("#schemHost svg"); if (s) s.classList.add("schem"); }).catch(() => { $("#schemHost").innerHTML = '<p class="note">Gambar skema ada di file skema_rangkaian.svg.</p>'; });
 </script>
 </body>
