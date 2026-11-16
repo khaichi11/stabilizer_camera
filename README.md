@@ -2,7 +2,9 @@
 
 Gimbal servo 2 sumbu (nunduk + kiri-kanan) yang dipakai di sabuk, untuk kamera Intel RealSense D435. Kamera dijaga menunduk sekitar 35° dan datar kiri-kanan saat berjalan. Semua bagian dicetak 3D tanpa support, baut dan mur besar ikut dicetak. Kendalinya ESP32-C3 Super Mini + MPU6050, dan semua pengaturannya lewat aplikasi web via Bluetooth (bersandi) atau kabel USB.
 
-![Tampak depan](gambar/gimbal_tampak_depan.png)
+| | |
+|---|---|
+| ![Gimbal dari depan kiri](gambar/gimbal_depan_kiri.png) | ![Gimbal dari depan kanan](gambar/gimbal_depan_kanan.png) |
 
 ## Isi repo
 
@@ -104,13 +106,5 @@ Hasil saat ini: semua cek lolos.
 `fusion/skrip/D435_gimbal.py` adalah gabungan `sumber/geom.py` + `sumber/checks.py` + `sumber/stage2.py`. Jalankan skrip itu di Fusion (Utilities → Scripts) untuk membangun ulang model. Skrip yang sama:
 - mengekspor STL ke `print_ready`;
 - menulis `build_log.txt` berisi hasil cek kecocokan part, 55 posisi gerak, jalur pemasangan, dan jalur kelima kabel.
-
-## Galeri
-
-| | |
-|---|---|
-| ![Sisi kanan](gambar/gimbal_sisi_kanan.png) | ![Tampak bawah](gambar/gimbal_tampak_bawah.png) |
-| ![Kenop sabuk](gambar/gimbal_dua_kenop_sabuk.png) | ![Kotak ESP32](gambar/gimbal_kotak_esp.png) |
-| ![Kabel tersembunyi](gambar/gimbal_kabel_tersembunyi.png) | ![Poros dan tutup](gambar/gimbal_poros_dan_tutup.png) |
 
 Panduan lengkap merakit ada di [PANDUAN.md](PANDUAN.md).
