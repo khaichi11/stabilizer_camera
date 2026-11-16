@@ -18,7 +18,6 @@
 #define OUTPUT 1
 #define DEG_TO_RAD 0.017453292519943295769236907684886
 #define RAD_TO_DEG 57.295779513082320876798154814105
-#define CONFIG_BLUEDROID_ENABLED 1
 class String {
  public:
   std::string s;
@@ -28,6 +27,7 @@ class String {
   size_t length() const { return s.size(); }
   char operator[](size_t i) const { return s[i]; }
   const char *c_str() const { return s.c_str(); }
+  bool operator==(const String &o) const { return s == o.s; }
 };
 uint32_t millis();
 uint32_t micros();
@@ -35,6 +35,7 @@ void delay(uint32_t ms);
 void pinMode(int, int);
 void digitalWrite(int, int);
 bool ledcAttach(uint8_t pin, uint32_t freq, uint8_t res);
+uint32_t ledcChangeFrequency(uint8_t pin, uint32_t freq, uint8_t res);
 bool ledcWrite(uint8_t pin, uint32_t duty);
 float temperatureRead();
 struct MockSerial {

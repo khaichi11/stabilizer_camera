@@ -3,7 +3,10 @@
 #include "Arduino.h"
 #include "Wire.h"
 #include "Preferences.h"
-#include "BLEDevice.h"
+#include "WiFi.h"
+#include "ESPmDNS.h"
+#include "lwip/sockets.h"
+#include <cerrno>
 #include "esp_system.h"
 #include "esp_random.h"
 #include <random>
@@ -17,8 +20,28 @@ static std::normal_distribution<double> nd(0.0, 1.0);
 MockSerial Serial;
 MockESP ESP;
 TwoWire Wire;
-BLEServer *BLEDevice::srv = nullptr;
-int BLEDevice::advStarts = 0;
+WiFiClass WiFi;
+MDNSResponder MDNS;
+std::vector<std::shared_ptr<MockSock>> &mockSocks() {
+  static std::vector<std::shared_ptr<MockSock>> v;
+  return v;
+}
+// non-blocking send onto a fake connection: takes what 'room' allows, EAGAIN when it is full
+int send(int fd, const void *buf, size_t n, int) {
+  auto &v = mockSocks();
+  if (fd < 0 || fd >= (int)v.size() || !v[fd]->peerOpen) {
+    errno = ECONNRESET;
+    return -1;
+  }
+  MockSock &s = *v[fd];
+  size_t k = std::min(n, s.room);
+  if (!k) {
+    errno = EAGAIN;
+    return -1;
+  }
+  s.out.append((const char *)buf, k);
+  return (int)k;
+}
 static bool restarted = false;
 void MockESP::restart() { restarted = true; }
 
@@ -36,22 +59,31 @@ static void rx(double a, M3 o) { double c = cos(a), s = sin(a); M3 r = {{1, 0, 0
 static void ry(double a, M3 o) { double c = cos(a), s = sin(a); M3 r = {{c, 0, s}, {0, 1, 0}, {-s, 0, c}}; memcpy(o, r, sizeof(M3)); }
 static void rz(double a, M3 o) { double c = cos(a), s = sin(a); M3 r = {{c, -s, 0}, {s, c, 0}, {0, 0, 1}}; memcpy(o, r, sizeof(M3)); }
 static const double D2R = M_PI / 180.0;
+static uint8_t regs[128];  // MPU6050 registers written by the firmware
+static uint32_t ledcHz = 50;  // servo pulses per second, as the firmware set the LEDC
 
+static double envd(const char *k, double d) { const char *v = getenv(k); return v ? atof(v) : d; }
+// MG90S-like analog servo. It only reads a new pulse once per 20 ms frame (the LEDC duty takes effect at the
+// next period and the servo measures the pulse while it arrives), ignores changes inside its dead band,
+// follows with a lag and has a top speed. Defaults can be changed with SRV_TAU (ms), SRV_DB (us),
+// SRV_VMAX (deg/s), BACKLASH (deg), SRV_LATCH=0 (servo sees every write at once).
 struct Servo {
   double ang = 0;      // deg, output shaft (after backlash)
   double motor = 0;    // deg, motor side
-  double pulse = 0;    // us, 0 = no pulses
+  double pending = 0;  // us, last value written to the LEDC
+  double pulse = 0;    // us, what the servo works from (0 = no pulses)
   double usPerDeg = 11.0;
   void step(double dt) {
     if (pulse <= 0) return;
     double tgt = (pulse - 1500.0) / usPerDeg;
     double err = tgt - motor;
-    if (fabs(err) > 8.0 / usPerDeg) {  // servo dead band (8 us)
-      double v = err / 0.025;           // 25 ms lag
-      v = std::max(-500.0, std::min(500.0, v));
+    if (fabs(err) > envd("SRV_DB", 8.0) / usPerDeg) {  // dead band
+      double v = err / (envd("SRV_TAU", 25.0) * 1e-3);   // lag
+      double vmax = envd("SRV_VMAX", 500.0);
+      v = std::max(-vmax, std::min(vmax, v));
       motor += v * dt;
     }
-    double bl = getenv("BACKLASH") ? atof(getenv("BACKLASH")) : 0.0;
+    double bl = envd("BACKLASH", 0.0);
     if (ang < motor - bl / 2) ang = motor - bl / 2;
     if (ang > motor + bl / 2) ang = motor + bl / 2;
   }
@@ -74,6 +106,7 @@ struct World {
   M3 Rimu_prev;
   bool havePrev = false;
   double omega[3] = {0, 0, 0};  // deg/s in IMU frame
+  double omega1[3] = {0, 0, 0};
   M3 Rcam, Rimu;
 } W;
 
@@ -105,6 +138,14 @@ static void truth(double &pitch, double &roll) {
 static void physStep(double dt) {
   double t = t_us * 1e-6;
   if (W.body) W.body(t, W);
+  // a pulse every 1/ledcHz s; the servo has measured it ~1.5 ms after it starts
+  static int64_t lastFrame = -1;
+  int64_t frame = ((int64_t)t_us - 1500) * ledcHz / 1000000;
+  if (envd("SRV_LATCH", 1) == 0 || frame != lastFrame) {
+    lastFrame = frame;
+    W.pitchS.pulse = W.pitchS.pending;
+    W.rollS.pulse = W.rollS.pending;
+  }
   W.pitchS.step(dt);
   W.rollS.step(dt);
   computeOrientation();
@@ -114,8 +155,14 @@ static void physStep(double dt) {
       for (int j = 0; j < 3; j++) rt[i][j] = W.Rimu_prev[j][i];
     mmul(rt, W.Rimu, S);
     double om[3] = {(S[2][1] - S[1][2]) / (2 * dt) / D2R, (S[0][2] - S[2][0]) / (2 * dt) / D2R, (S[1][0] - S[0][1]) / (2 * dt) / D2R};
-    double k = dt / (0.0045 + dt);
-    for (int i = 0; i < 3; i++) W.omega[i] += (om[i] - W.omega[i]) * k;
+    // MPU6050 digital low-pass filter, from the DLPF_CFG register (datasheet delay per setting), modelled as
+    // two first-order stages with the same total delay
+    static const double dlpfDelayMs[8] = {0.98, 1.9, 2.8, 4.8, 8.3, 13.4, 18.6, 0.98};
+    double k = dt / (dlpfDelayMs[regs[0x1A] & 7] * 0.5e-3 + dt);
+    for (int i = 0; i < 3; i++) {
+      W.omega1[i] += (om[i] - W.omega1[i]) * k;
+      W.omega[i] += (W.omega1[i] - W.omega[i]) * k;
+    }
   }
   memcpy(W.Rimu_prev, W.Rimu, sizeof(M3));
   W.havePrev = true;
@@ -128,15 +175,16 @@ void delay(uint32_t ms) { for (uint32_t i = 0; i < ms * 4; i++) physStep(0.00025
 void pinMode(int, int) {}
 static int ledState = 1;
 void digitalWrite(int pin, int v) { if (pin == 8) ledState = v; }
-bool ledcAttach(uint8_t, uint32_t, uint8_t) { return true; }
+bool ledcAttach(uint8_t, uint32_t f, uint8_t) { ledcHz = f; return true; }
+uint32_t ledcChangeFrequency(uint8_t, uint32_t f, uint8_t) { ledcHz = f; return f; }
 static std::map<int, double> pinPulse;
 bool ledcWrite(uint8_t pin, uint32_t duty) {
-  double us = duty * 20000.0 / 16383.0;
+  double us = duty * 1e6 / ledcHz / 16383.0;
   pinPulse[pin] = us;
   Servo &s3 = W.swapped ? W.rollS : W.pitchS;
   Servo &s4 = W.swapped ? W.pitchS : W.rollS;
-  if (pin == 3) s3.pulse = us;
-  if (pin == 4) s4.pulse = us;
+  if (pin == 3) s3.pending = us;
+  if (pin == 4) s4.pending = us;
   return true;
 }
 float temperatureRead() { return 41.5f; }
@@ -147,7 +195,6 @@ static uint16_t wAddr = 0;
 static uint8_t regPtr = 0;
 static std::vector<uint8_t> wBuf, rBuf;
 static size_t rPos = 0;
-static uint8_t regs[128];
 bool TwoWire::begin(int, int, uint32_t) { return true; }
 bool TwoWire::end() { return true; }
 void TwoWire::setTimeOut(uint16_t) {}
@@ -232,28 +279,80 @@ static void check(bool ok, const char *what) {
   if (!ok) fails++;
 }
 // error statistics of the TRUE camera angle
-struct Stat { double sum2 = 0, mx = 0; long n = 0; void add(double e) { sum2 += e * e; mx = std::max(mx, fabs(e)); n++; } double rms() const { return n ? sqrt(sum2 / n) : 0; } };
+struct Stat { double sum = 0, sum2 = 0, mx = 0; long n = 0; void add(double e) { sum += e; sum2 += e * e; mx = std::max(mx, fabs(e)); n++; } double rms() const { return n ? sqrt(sum2 / n) : 0; } double mean() const { return n ? sum / n : 0; } };
 
-static BLECharacteristic *chr(const char *uuid) {
-  for (auto c : BLEDevice::srv->svc->chars)
-    if (c->uuid == uuid) return c;
-  return nullptr;
-}
-static std::string bleRx;
-static void bleWrite(const std::string &s) {
-  auto rxc = chr(NUS_RX);
-  for (size_t i = 0; i < s.size(); i += 20) {  // 20-byte writes like a small MTU
-    rxc->value = s.substr(i, 20);
-    rxc->cb->onWrite(rxc);
-  }
-}
-static std::string bleTake() {
-  auto txc = chr(NUS_TX);
-  for (auto &p : txc->notified) bleRx += p;
-  txc->notified.clear();
-  std::string s = bleRx;
-  bleRx.clear();
+// ------------------------------------------------------------------ a browser on the phone/iPad
+static std::shared_ptr<MockSock> tcpOpen(const std::string &request) {
+  auto s = std::make_shared<MockSock>();
+  s->in = request;
+  webServer.pending.push_back(WiFiClient(s));
   return s;
+}
+static std::string httpGet(const std::string &path, const std::string &extra = "") {
+  auto s = tcpOpen("GET " + path + " HTTP/1.1\r\nHost: gimbal-d435.local\r\nAccept-Encoding: gzip\r\n" + extra + "\r\n");
+  for (int i = 0; i < 600 && s->open; i++) run(0.005);  // until the gimbal closes it
+  return s->out;
+}
+static std::string hexs(const std::string &x) {
+  static const char *H = "0123456789abcdef";
+  std::string o;
+  for (unsigned char c : x) { o += H[c >> 4]; o += H[c & 15]; }
+  return o;
+}
+static std::shared_ptr<MockSock> wsOpen(const std::string &key = "dGhlIHNhbXBsZSBub25jZQ==") {
+  auto s = tcpOpen("GET /ws HTTP/1.1\r\nHost: 172.20.10.3\r\nupgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key +
+                   "\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n");
+  run(0.05);
+  return s;
+}
+static void wsSend(std::shared_ptr<MockSock> s, const std::string &text) {  // a masked text frame, like a browser
+  std::string f;
+  f += (char)0x81;
+  size_t n = text.size();
+  if (n < 126) f += (char)(0x80 | n);
+  else { f += (char)(0x80 | 126); f += (char)(n >> 8); f += (char)(n & 255); }
+  const uint8_t mk[4] = {0x12, 0x34, 0x56, 0x78};
+  f.append((const char *)mk, 4);
+  for (size_t i = 0; i < n; i++) f += (char)(text[i] ^ mk[i & 3]);
+  s->in += f;
+}
+static std::string wsTake(std::shared_ptr<MockSock> s) {  // the text of every whole frame received so far
+  std::string &o = s->out, txt;
+  size_t p = 0;
+  if (o.rfind("HTTP/1.1 101", 0) == 0) p = o.find("\r\n\r\n") + 4;
+  while (o.size() - p >= 2) {
+    uint8_t op = o[p] & 0x0F;
+    size_t len = (uint8_t)o[p + 1] & 0x7F, hl = 2;
+    if (len == 126) {
+      if (o.size() - p < 4) break;
+      len = (size_t)(uint8_t)o[p + 2] << 8 | (uint8_t)o[p + 3];
+      hl = 4;
+    }
+    if (o.size() - p < hl + len) break;
+    if (op == 1) txt += o.substr(p + hl, len);
+    p += hl + len;
+  }
+  o.erase(0, p);
+  return txt;
+}
+static std::string nonceOf(const std::string &b, const char *after) {
+  size_t p = b.find(after);
+  return p == std::string::npos ? "" : b.substr(p + strlen(after), 32);
+}
+static void wsAuth(std::shared_ptr<MockSock> s, const char *pin) {
+  wsSend(s, "HELLO");
+  run(0.2);
+  std::string n = nonceOf(wsTake(s), "\"nonce\":\"");
+  char h[65];
+  authHash(n.c_str(), pin, h);
+  wsSend(s, std::string("AUTH ") + h);
+  run(0.2);
+}
+static int countT(const std::string &b) {
+  int n = 0;
+  for (auto &l : lines(b))
+    if (l.rfind("T,", 0) == 0) n++;
+  return n;
 }
 
 int main() {
@@ -307,6 +406,8 @@ int main() {
   check(cfg.dirP == -1 && cfg.dirR == 1, "servo directions");
   printf("   usdeg p %.2f (true %.2f)  r %.2f (true %.2f)\n", cfg.usDegP, W.pitchS.usPerDeg, cfg.usDegR, W.rollS.usPerDeg);
   check(fabs(cfg.usDegP - W.pitchS.usPerDeg) < 0.8 && fabs(cfg.usDegR - W.rollS.usPerDeg) < 0.8, "servo scale within 0.8 us/deg");
+  printf("   servo timing measured: delay %.1f ms, lag %.1f ms (%d/8 steps)\n", cfg.srvDelay, cfg.srvTau, cal.tCount);
+  check(cal.tCount >= 6 && cfg.srvDelay >= 0 && cfg.srvDelay < 40 && cfg.srvTau > 8 && cfg.srvTau < 2.5 * envd("SRV_TAU", 25.0), "servo delay and lag measured");
   printf("   bias %.2f %.2f %.2f (true %.2f %.2f %.2f)\n", cfg.bias[0], cfg.bias[1], cfg.bias[2], W.gyroBias[0], W.gyroBias[1], W.gyroBias[2]);
 
   printf("== stabilise, body still (IMU mounted 1.5/1.0 deg crooked, not yet levelled)\n");
@@ -325,7 +426,7 @@ int main() {
   run(2.5);
   show(takeUsb(), "CAL");
   {
-    const char *keys[] = {"kp", "gain", "ff", "smooth", "db", "acctau"};
+    const char *keys[] = {"kp", "gain", "ff", "smooth", "db", "acctau", "ffb", "pred", "sdelay", "stau", "sdb", "dbcomp", "acctauw", "dlpf", "pwmhz"};
     for (auto k : keys) {
       std::string env = k; for (auto &c : env) c = toupper(c);
       if (getenv(env.c_str())) { std::string c = std::string("SET ") + k + " " + getenv(env.c_str()); usb(c.c_str()); }
@@ -336,50 +437,107 @@ int main() {
   printf("   true camera after levelling: pitch %.2f roll %.2f\n", tp, tr);
   check(fabs(tp - 35) < 0.25 && fabs(tr) < 0.25, "camera truly at 35.0 / 0.0 within 0.25 deg");
 
-  printf("== walking: body leans 10 deg sideways + 8 deg forward, sway 3 deg @1.8 Hz, bumps 0.3 g\n");
-  auto walk = [](double t, World &w) {
-    double t0 = 30.0;
-    double ramp = std::min(1.0, std::max(0.0, (t - t0) / 2.0));
+  // two walking cases, each measured stabilised and then with the servos held in the centre
+  //  goyang: the original test, lean 10/8 deg + 3 deg sway at 1.8 Hz, 0.3 g bumps
+  //  jalan:  realistic gait at the belt: left-right at the stride (0.9 Hz), nod at every step (1.8 Hz),
+  //          heel-strike jolt at each step, hip turning, forward/side accelerations, a little randomness
+  auto goyang = [](double t, World &w) {
+    double ramp = std::min(1.0, std::max(0.0, (t - 30.0) / 2.0));
     w.leanS = 10 * ramp + 3 * sin(2 * M_PI * 1.8 * t);
     w.leanF = 8 * ramp + 2.5 * sin(2 * M_PI * 1.8 * t + 1.0);
     w.yaw = 6 * sin(2 * M_PI * 0.9 * t);
+    w.accLin[0] = 0;
     w.accLin[2] = 0.3 * sin(2 * M_PI * 3.6 * t);
     w.accLin[1] = 0.12 * sin(2 * M_PI * 1.8 * t + 0.4);
   };
-  double tStart = t_us * 1e-6;
-  W.body = [&](double t, World &w) { walk(t - tStart + 30.0, w); };
-  Stat sp, sr;
-  run(4.0);
-  run(10.0, [&]() {
-    static uint64_t last = 0;
-    if (t_us - last >= 5000) {
-      last = t_us;
-      double a, b;
-      truth(a, b);
-      sp.add(a - 35);
-      sr.add(b);
-    }
-  });
-  printf("   stabilised:   pitch error rms %.2f max %.2f | roll error rms %.2f max %.2f (deg)\n", sp.rms(), sp.mx, sr.rms(), sr.mx);
-  {
-    usb("MODE center");
-    run(1.0);
-    Stat cp, cr;
-    run(10.0, [&]() {
-      static uint64_t last = 0;
+  auto jalan = [](double t, World &w) {
+    // ~0.2 deg of random wobble. Filtered twice so it is smooth like a body (filtered once, its rate
+    // would be white noise and look like violent vibration)
+    static double nF1 = 0, nS1 = 0, nF = 0, nS = 0;
+    nF1 += (7.0 * nd(rng) - nF1) * 0.005;
+    nS1 += (7.0 * nd(rng) - nS1) * 0.005;
+    nF += (nF1 - nF) * 0.005;
+    nS += (nS1 - nS) * 0.005;
+    const double fs = 0.9, f2 = 1.8;
+    double ramp = std::min(1.0, std::max(0.0, (t - 30.0) / 2.0));
+    double ph = fmod(t * f2, 1.0), wd = 0.06 * f2;  // heel strike: 60 ms bump after each step
+    double heel = ph < wd ? 0.5 - 0.5 * cos(2 * M_PI * ph / wd) : 0;
+    w.leanS = 10 * ramp + 3.5 * sin(2 * M_PI * fs * t) + 0.8 * sin(2 * M_PI * f2 * t + 0.7) + nS;
+    w.leanF = 8 * ramp + 2.0 * sin(2 * M_PI * f2 * t + 1.0) + 0.6 * sin(2 * M_PI * 2 * f2 * t + 0.3) + 0.8 * heel + nF;
+    w.yaw = getenv("J_NOYAW") ? 0 : 5 * sin(2 * M_PI * fs * t);
+    if (getenv("J_NOHEEL")) heel = 0;
+    w.accLin[2] = 0.22 * sin(2 * M_PI * f2 * t) + 0.08 * sin(2 * M_PI * 2 * f2 * t) + 0.5 * heel;
+    w.accLin[1] = 0.15 * sin(2 * M_PI * f2 * t + 0.4);
+    w.accLin[0] = 0.08 * sin(2 * M_PI * fs * t + 0.2);
+    if (getenv("J_NOACC")) w.accLin[0] = w.accLin[1] = w.accLin[2] = 0;
+    if (getenv("J_NOLEAN")) { w.leanS -= 10 * ramp; w.leanF -= 8 * ramp; }
+  };
+  struct WalkRes { Stat sp, sr, cp, cr, ep, er, vp, vr, vcp, vcr; };
+  Stat *estP = nullptr, *estR = nullptr;  // how wrong the IMU estimate is (measured - true)
+  // fast shake = camera turning rate after removing what is slower than ~5 Hz (what blurs a video frame
+  // and makes rolling-shutter jello); sampled every 1 ms
+  auto measure = [&](Stat &a, Stat &b, double secs, Stat *va = nullptr, Stat *vb = nullptr) {
+    uint64_t last = 0, lastV = 0;
+    double sx = 0, sy = 0, px = 0, py = 0;
+    bool first = true;
+    run(secs, [&]() {
+      if (va && t_us - lastV >= 1000) {
+        lastV = t_us;
+        double x, y;
+        truth(x, y);
+        if (first) { sx = x; sy = y; first = false; }
+        const double k = 1.0 - exp(-0.001 / 0.032);  // 5 Hz high-pass
+        sx += (x - sx) * k;
+        sy += (y - sy) * k;
+        double hx = x - sx, hy = y - sy;
+        va->add((hx - px) / 0.001);
+        vb->add((hy - py) / 0.001);
+        px = hx;
+        py = hy;
+      }
       if (t_us - last >= 5000) {
         last = t_us;
-        double a, b;
-        truth(a, b);
-        cp.add(a - 35);
-        cr.add(b);
+        double x, y;
+        truth(x, y);
+        a.add(x - cfg.pitchSet);
+        b.add(y - cfg.rollSet);
+        if (estP) { estP->add(pitchMeas - x); estR->add(rollMeas - y); }
       }
     });
-    printf("   no gimbal:    pitch error rms %.2f max %.2f | roll error rms %.2f max %.2f (deg)\n", cp.rms(), cp.mx, cr.rms(), cr.mx);
-    check(sp.rms() < cp.rms() * 0.5 && sr.rms() < cr.rms() * 0.5, "stabilisation removes more than half the motion");
+  };
+  auto walkTest = [&](const char *name, std::function<void(double, World &)> f) {
+    WalkRes r;
+    double tStart = t_us * 1e-6;
+    W.body = [&](double t, World &w) { f(t - tStart + 30.0, w); };
+    run(4.0);
+    estP = &r.ep; estR = &r.er;
+    measure(r.sp, r.sr, 12.0, &r.vp, &r.vr);
+    estP = estR = nullptr;
+    usb("MODE center");
+    run(1.0);
+    measure(r.cp, r.cr, 12.0, &r.vcp, &r.vcr);
     usb("MODE stab");
     run(2.0);
-  }
+    W.body = nullptr;
+    W.leanF = W.leanS = W.yaw = 0;
+    W.accLin[0] = W.accLin[1] = W.accLin[2] = 0;
+    run(3.0);
+    takeUsb();
+    printf("   %-7s stabil: nunduk rms %.2f maks %.2f | kiri-kanan rms %.2f maks %.2f (deg)\n", name, r.sp.rms(), r.sp.mx, r.sr.rms(), r.sr.mx);
+    printf("   %-7s salah baca sensor saat stabil: nunduk rms %.2f (rata2 %+.2f) maks %.2f | kiri-kanan rms %.2f (rata2 %+.2f) maks %.2f\n", name, r.ep.rms(), r.ep.mean(), r.ep.mx, r.er.rms(), r.er.mean(), r.er.mx);
+    printf("   %-7s getar cepat (>5 Hz, deg/s rms): stabil %.1f / %.1f, tanpa %.1f / %.1f\n", name, r.vp.rms(), r.vr.rms(), r.vcp.rms(), r.vcr.rms());
+    printf("   %-7s tanpa : nunduk rms %.2f maks %.2f | kiri-kanan rms %.2f maks %.2f (deg)\n", name, r.cp.rms(), r.cp.mx, r.cr.rms(), r.cr.mx);
+    return r;
+  };
+  printf("== walking\n");
+  WalkRes wg = walkTest("goyang", goyang);
+  WalkRes wj = walkTest("jalan", jalan);
+  Stat sp = wj.sp, sr = wj.sr;
+  check(wg.sp.rms() < wg.cp.rms() * 0.5 && wg.sr.rms() < wg.cr.rms() * 0.5, "goyang: stabilisation removes more than half the motion");
+  check(wj.sp.rms() < wj.cp.rms() * 0.5 && wj.sr.rms() < wj.cr.rms() * 0.5, "jalan: stabilisation removes more than half the motion");
+  check(wj.sp.rms() < 0.8 && wj.sr.rms() < 0.8, "jalan: camera within 0.8 deg rms while walking");
+  check(wj.vp.rms() < 20 && wj.vr.rms() < 20, "jalan: servos add little fast shake (< 20 deg/s rms above 5 Hz)");
+  check(fabs(wj.ep.mean()) < 0.3 && fabs(wj.er.mean()) < 0.3, "jalan: walking does not bias the IMU estimate (< 0.3 deg)");
   W.body = nullptr;
   W.leanF = W.leanS = W.yaw = 0;
   W.accLin[0] = W.accLin[1] = W.accLin[2] = 0;
@@ -396,6 +554,7 @@ int main() {
     jitP = sqrt(std::max(0.0, s33 / n - (s3 / n) * (s3 / n)));
     jitR = sqrt(std::max(0.0, s44 / n - (s4 / n) * (s4 / n)));
     printf("   servo jitter when still: %.2f / %.2f us rms\n", jitP, jitR);
+    check(jitP < 1.5 && jitR < 1.5, "servos quiet when still (< 1.5 us rms)");
   }
   double riseMs = -1, overPct = -1;
   printf("== step test (STEP p 5)\n");
@@ -412,92 +571,162 @@ int main() {
       }
     }
     check(rows.size() == 300 && o.find("CAPEND") != std::string::npos, "300 samples dumped");
-    double base = 35.0, t10 = -1, t90 = -1, peak = 0;
+    // time until the camera is within 1 deg of the new target (a servo's dead band can leave the last
+    // ~0.7 deg to the slower I term), overshoot, and how close it is just before the step ends
+    double base = 35.0, tIn = -1, peak = 0, endErr = 9;
     for (auto &r : rows) {
       double t = r[1] / 1000.0, p = r[3] / 100.0;
       if (t < 0.5 || t > 2.0) continue;
       double f = (p - base) / 5.0;
-      if (t10 < 0 && f >= 0.1) t10 = t;
-      if (t90 < 0 && f >= 0.9) t90 = t;
+      if (tIn < 0 && fabs(p - base - 5.0) < 1.0) tIn = t - 0.5;
       peak = std::max(peak, f);
+      if (t > 1.85) endErr = fabs(p - base - 5.0);
     }
-    printf("   rise 10-90%% %.0f ms, overshoot %.0f%%\n", (t90 - t10) * 1000, (peak - 1) * 100);
-    riseMs = (t90 - t10) * 1000; overPct = (peak - 1) * 100;
-    printf("SUMMARY kp=%s ki=%s ff=%s smooth=%s | walk rms p %.2f r %.2f max p %.2f r %.2f | rise %.0f ms over %.0f%% | jitter %.2f %.2f us\n",
-      getenv("KP") ? getenv("KP") : "-", getenv("GAIN") ? getenv("GAIN") : "-", getenv("FF") ? getenv("FF") : "-", getenv("SMOOTH") ? getenv("SMOOTH") : "-",
-      sp.rms(), sr.rms(), sp.mx, sr.mx, riseMs, overPct, jitP, jitR);
+    printf("   within 1 deg after %.0f ms, overshoot %.0f%%, off by %.2f deg after 1.4 s\n", tIn * 1000, (peak - 1) * 100, endErr);
+    riseMs = tIn * 1000; overPct = (peak - 1) * 100;
+    printf("SUMMARY | goyang rms p %.2f r %.2f | jalan rms p %.2f r %.2f max p %.2f r %.2f | reach %.0f ms over %.0f%% | jitter %.2f %.2f us | getar %.1f %.1f (tanpa %.1f %.1f)\n",
+      wg.sp.rms(), wg.sr.rms(), sp.rms(), sr.rms(), sp.mx, sr.mx, riseMs, overPct, jitP, jitR, wj.vp.rms(), wj.vr.rms(), wj.vcp.rms(), wj.vcr.rms());
     if (getenv("QUICK")) return 0;
-    check(t90 > 0 && (t90 - t10) < 0.4 && peak < 1.25, "step response fast, overshoot < 25%");
+    check(tIn > 0 && tIn < 0.3 && peak < 1.25 && endErr < 0.5, "step: within 1 deg in 0.3 s, overshoot < 25%, settles within 0.5 deg");
   }
 
-  printf("== Bluetooth: connect, PIN check, lockout\n");
-  BLEDevice::srv->mtu = 23;
-  BLEDevice::srv->cb->onConnect(BLEDevice::srv);
-  run(0.05);
-  bleWrite("HELLO\n");
-  run(0.3);
-  std::string b = bleTake();
-  show(b);
-  std::string nonce;
+  printf("== WiFi: first start\n");
+  check(WiFi.ap && WiFi.apName == "Gimbal-D435-A1B2" && WiFi.apPassword == "gimbald435", "no hotspot saved yet: own WiFi Gimbal-D435-A1B2 (sandi gimbald435)");
+  check(MDNS.host == "gimbal-d435" && MDNS.services == 1, "address gimbal-d435.local");
+  check(WiFi.txPower == WIFI_POWER_8_5dBm && !WiFi.sleep, "low WiFi power (less heat), no WiFi sleep (quick replies)");
+
+  printf("== the app is served by the gimbal itself\n");
   {
-    size_t p = b.find("\"nonce\":\"");
-    if (p != std::string::npos) nonce = b.substr(p + 9, 32);
+    std::string r = httpGet("/");
+    size_t h = r.find("\r\n\r\n");
+    std::string body = h == std::string::npos ? "" : r.substr(h + 4);
+    check(r.rfind("HTTP/1.1 200 OK", 0) == 0 && r.find("Content-Encoding: gzip") != std::string::npos && body.size() == WEB_FILES[0].len &&
+              (uint8_t)body[0] == 0x1f && (uint8_t)body[1] == 0x8b,
+          "GET / -> the app (gzip, complete)");
+    r = httpGet("/", std::string("If-None-Match: ") + WEB_FILES[0].etag + "\r\n");
+    check(r.rfind("HTTP/1.1 304", 0) == 0, "unchanged file -> 304, the browser uses its copy");
+    r = httpGet("/vendor/three.module.min.js");
+    h = r.find("\r\n\r\n");
+    check(r.rfind("HTTP/1.1 200 OK", 0) == 0 && r.size() - h - 4 == WEB_FILES[1].len, "3D library (163 KB) sent in pieces");
+    check(httpGet("/rahasia").rfind("HTTP/1.1 404", 0) == 0, "unknown file -> 404");
   }
-  check(nonce.size() == 32 && b.find("\"auth\":1") != std::string::npos, "HELLO gives a nonce, auth required");
-  bleWrite("GET\n");
+
+  printf("== WebSocket: PIN, two devices, slow device, lockout\n");
+  auto a = wsOpen();
+  check(a->out.find("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") != std::string::npos, "WebSocket handshake (RFC 6455 example key)");
+  wsSend(a, "HELLO");
   run(0.2);
-  b = bleTake();
-  check(b.find("ERR AUTH") != std::string::npos && b.find("CFG") == std::string::npos, "settings refused before PIN");
+  std::string b = wsTake(a);
+  show(b);
+  std::string nonce = nonceOf(b, "\"nonce\":\"");
+  check(nonce.size() == 32 && b.find("\"auth\":1") != std::string::npos, "HELLO gives a nonce, PIN required");
+  wsSend(a, "GET");
+  run(0.2);
+  b = wsTake(a);
+  check(b.find("ERR AUTH") != std::string::npos && b.find("CFG") == std::string::npos, "settings refused before the PIN");
   char h[65];
   authHash(nonce.c_str(), "000000", h);
-  bleWrite(std::string("AUTH ") + h + "\n");
+  wsSend(a, std::string("AUTH ") + h);
   run(0.2);
-  b = bleTake();
-  show(b);
+  b = wsTake(a);
   check(b.find("AUTH FAIL 4") != std::string::npos, "wrong PIN refused");
-  {
-    size_t p = b.find("AUTH FAIL 4 ");
-    nonce = b.substr(p + 12, 32);  // new nonce after a failure
-  }
+  nonce = nonceOf(b, "AUTH FAIL 4 ");
   authHash(nonce.c_str(), "123456", h);
-  bleWrite(std::string("AUTH ") + h + "\n");
-  run(0.5);
-  b = bleTake();
-  show(b, "AUTH");
-  check(b.find("AUTH OK") != std::string::npos && bleAuthed, "correct PIN accepted");
-  bleWrite("GET\n");
+  wsSend(a, std::string("AUTH ") + h);
   run(1.5);
-  b = bleTake();
-  check(b.find("CFG {") != std::string::npos, "CFG over Bluetooth (chunked 20 bytes)");
-  int tcount = 0;
-  for (auto &l : lines(b))
-    if (l.rfind("T,", 0) == 0) tcount++;
-  printf("   telemetry lines in 1.5 s over BLE: %d\n", tcount);
-  check(tcount >= 10, "telemetry flows over Bluetooth");
-  bleWrite("SET pitch 30\n");
+  b = wsTake(a);
+  check(b.find("AUTH OK") != std::string::npos && ws[0].authed && b.find("CFG {") != std::string::npos, "correct PIN accepted, settings sent");
+  printf("   telemetry lines in 1.5 s over WiFi: %d\n", countT(b));
+  check(countT(b) >= 27, "telemetry 20 times per second");
+  auto d2 = wsOpen("x3JJHMbDL1EzLkh9GBhXDw==");
+  wsAuth(d2, "123456");
+  b = wsTake(d2);
+  check(b.find("AUTH OK") != std::string::npos && wsCount(true) == 2, "a second phone/iPad can connect at the same time");
+  wsSend(a, "SET pitch 30");
   run(4.0);
-  bleTake();
+  std::string ba = wsTake(a), bb = wsTake(d2);
   truth(tp, tr);
+  check(ba.find("\"pitch\":30.00") != std::string::npos && bb.find("\"pitch\":30.00") != std::string::npos, "a change from one device shows on the other");
   check(fabs(cfg.pitchSet - 30) < 0.01 && fabs(tp - 30) < 0.3, "SET pitch 30 from the app moves the camera to 30 deg");
-  BLEDevice::srv->cb->onDisconnect(BLEDevice::srv);
-  int adv0 = BLEDevice::advStarts;
-  run(0.1);
-  check(BLEDevice::advStarts == adv0 + 1 && !bleAuthed, "advertising restarts after disconnect");
-  // lockout
-  BLEDevice::srv->cb->onConnect(BLEDevice::srv);
-  run(0.05);
-  bleWrite("HELLO\n");
+  d2->room = 0;  // the iPad stops reading (screen locked, weak signal)
+  uint32_t loops0 = loopCount;
+  run(3.0);
+  b = wsTake(a);
+  check(countT(b) >= 55 && ws[1].used, "a stalled device does not slow the gimbal or the other device");
+  d2->room = 1 << 20;
+  wsSend(d2, "PING");
+  run(1.0);
+  b = wsTake(d2);
+  check(b.find("PONG") != std::string::npos && countT(b) > 0, "it catches up when it reads again");
+  (void)loops0;
+  d2->peerOpen = false;
   run(0.2);
-  bleTake();
-  for (int i = 0; i < 5; i++) {
-    bleWrite("AUTH 0000000000000000000000000000000000000000000000000000000000000000\n");
+  check(!ws[1].used && wsCount(true) == 1, "closed device frees its place");
+  {
+    auto x1 = wsOpen("AAAAAAAAAAAAAAAAAAAAAA=="), x2 = wsOpen("BBBBBBBBBBBBBBBBBBBBBB=="), x3 = wsOpen("CCCCCCCCCCCCCCCCCCCCCC==");
+    check(x3->out.rfind("HTTP/1.1 503", 0) == 0, "4th device at once gets a clear 'full' answer");
+    x1->peerOpen = x2->peerOpen = false;
     run(0.2);
   }
-  run(0.6);
-  b = bleTake();
-  check(b.find("AUTH LOCKED 30") != std::string::npos && BLEDevice::srv->disconnects == 1, "5 wrong PINs -> locked + disconnected");
-  BLEDevice::srv->cb->onDisconnect(BLEDevice::srv);
-  run(0.1);
+  {
+    auto c = wsOpen("DDDDDDDDDDDDDDDDDDDDDD==");
+    wsSend(c, "HELLO");
+    run(0.2);
+    for (int i = 0; i < 5; i++) {
+      wsSend(c, "AUTH 0000000000000000000000000000000000000000000000000000000000000000");
+      run(0.2);
+    }
+    run(0.6);
+    b = wsTake(c);
+    check(b.find("AUTH LOCKED 30") != std::string::npos && !c->open, "5 wrong PINs -> locked 30 s and disconnected");
+    lockUntil = 0;
+  }
+  {
+    auto q = wsOpen("EEEEEEEEEEEEEEEEEEEEEE==");
+    for (int i = 0; i < 5; i++) {  // the first device keeps pinging like the app does
+      wsSend(a, "PING");
+      run(5.0);
+    }
+    check(!q->open && ws[0].used, "a silent connection is dropped after 20 s, the pinging app stays");
+  }
+
+  printf("== WiFi: join the phone hotspot from the app\n");
+  WiFi.apStations = 1;  // the phone doing the setup is on the gimbal's own WiFi
+  wsSend(a, "WIFI SCAN");
+  run(2.5);
+  b = wsTake(a);
+  show(b, "WIFI LIST");
+  check(b.find("WIFI LIST [{\"s\":\"HP Khair\"") != std::string::npos && b.find("Wifi \\\"Rumah\\\"") != std::string::npos &&
+            b.find("HP Khair", b.find("HP Khair") + 1) == std::string::npos,
+        "scan lists hotspots once each, names escaped");
+  wsSend(a, "WIFI JOIN " + hexs("HP Khair") + " " + hexs("rahasia123"));
+  run(3.0);
+  b = wsTake(a);
+  show(b, "Tersambung");
+  check(staUp && !strcmp(cfg.wifiSsid, "HP Khair") && b.find("http://gimbal-d435.local atau http://172.20.10.3") != std::string::npos,
+        "joins the hotspot and tells the new address");
+  check(WiFi.ap, "own WiFi stays on while the phone is still on it (to read the address)");
+  for (int i = 0; i < 25 && WiFi.ap; i++) {
+    wsSend(a, "PING");
+    run(5.0);
+  }
+  check(!WiFi.ap && WiFi.modeNow == WIFI_STA, "then the own WiFi turns off (one radio, less heat)");
+  WiFi.apStations = 0;
+  WiFi.hotspotOn = false;  // hotspot switched off
+  for (int i = 0; i < 5; i++) {
+    wsSend(a, "PING");
+    run(5.0);
+  }
+  check(!staUp && WiFi.ap, "hotspot gone for 20 s -> own WiFi back on for setup");
+  WiFi.hotspotOn = true;
+  for (int i = 0; i < 6 && !(staUp && !WiFi.ap); i++) {
+    wsSend(a, "PING");
+    run(5.0);
+  }
+  check(staUp && !WiFi.ap, "hotspot back -> joins again, own WiFi off");
+  wsSend(a, "WIFI JOIN 41 3132");
+  run(0.2);
+  check(wsTake(a).find("ERR sandi hotspot minimal 8") != std::string::npos, "too-short hotspot password refused");
 
   printf("== IMU wire breaks for 2 s\n");
   takeUsb();
@@ -516,6 +745,22 @@ int main() {
   Config before = cfg;
   memset(&cfg, 0, sizeof(cfg));
   check(cfgLoad() && cfg.usDegP == before.usDegP && cfg.swapServo == before.swapServo && fabs(cfg.pitchSet - 30) < 0.01, "config reloaded from flash");
+
+  printf("== upgrade: settings saved by firmware 4.0 are kept\n");
+  {
+    ConfigV40 o;
+    memset(&o, 0, sizeof(o));
+    memcpy(&o, &before, offsetof(ConfigV40, crc));  // 4.0 layout = same fields up to the old crc
+    o.size = sizeof(ConfigV40);
+    o.crc = crc32((const uint8_t *)&o, offsetof(ConfigV40, crc));
+    prefs.putBytes("cfg", &o, sizeof(o));
+    memset(&cfg, 0, sizeof(cfg));
+    cfgMigrated = false;
+    bool ok = cfgLoad();
+    check(ok && cfgMigrated && cfg.size == sizeof(Config) && cfg.usDegP == before.usDegP && cfg.swapServo == before.swapServo &&
+              fabs(cfg.pitchSet - 30) < 0.01 && fabs(cfg.ffBody - 1.0f) < 1e-6 && fabs(cfg.srvTau - 25.0f) < 1e-6 && !strcmp(cfg.pin, before.pin),
+          "4.0 settings kept, new settings get defaults");
+  }
 
   printf("\n%s (%d failed)\n", fails ? "SOME CHECKS FAILED" : "ALL CHECKS PASSED", fails);
   return fails ? 1 : 0;
