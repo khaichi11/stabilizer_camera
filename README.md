@@ -1,132 +1,194 @@
-# Stabilizer Camera: gimbal sabuk 2 sumbu untuk Intel RealSense D435
+# Stabilizer Camera: gimbal sabuk dua sumbu untuk Intel RealSense D435
 
 [![Firmware](https://github.com/khaichi11/stabilizer_camera/actions/workflows/firmware.yml/badge.svg)](https://github.com/khaichi11/stabilizer_camera/actions/workflows/firmware.yml)
 
-Gimbal servo 2 sumbu (nunduk + kiri-kanan) yang dipakai di sabuk, untuk kamera Intel RealSense D435. Kamera dijaga menunduk sekitar 35° dan datar kiri-kanan saat berjalan. Semua bagian dicetak 3D tanpa support, baut dan mur besar ikut dicetak. Kendalinya ESP32-C3 Super Mini + MPU6050, dan semua pengaturannya lewat aplikasi web via Bluetooth (bersandi) atau kabel USB.
+**Bahasa Indonesia** | [English](README.en.md)
+
+Gimbal servo dua sumbu yang dipasang pada sabuk untuk kamera Intel RealSense D435. Gimbal ini menjaga dua hal saat Anda berjalan:
+- **sudut atas-bawah** (*pitch*) kamera tetap pada nilai yang Anda pilih, bawaan 35° di bawah garis datar;
+- **sudut kanan-kiri** (*roll*) tetap 0°, sehingga cakrawala tetap datar.
+
+Ciri utamanya:
+- Seluruh bagian dicetak 3D tanpa penyangga (*support*), termasuk baut dan mur berukuran besar.
+- Pengendalinya ESP32-C3 Super Mini dengan sensor MPU6050.
+- Semua pengaturan dilakukan melalui aplikasi web yang disajikan oleh gimbal itu sendiri lewat WiFi, sehingga dapat dibuka di Safari atau Chrome, termasuk pada iPad.
 
 | | |
 |---|---|
 | ![Gimbal dari depan kiri](gambar/gimbal_depan_kiri.png) | ![Gimbal dari depan kanan](gambar/gimbal_depan_kanan.png) |
 
-## Isi repo
+## Isi repositori
 
-| Folder / file | Isi |
+| Folder / berkas | Isi |
 |---|---|
-| `stl/` | 16 file STL siap cetak (1 file = 1 buah) + `RENCANA_CETAK.md`. `semua_part_satu_pelat.stl` berisi semua part dalam satu pelat 220 × 220 mm |
-| `fusion/D435_gimbal.f3d` | Model Fusion 360 lengkap: tata letak cetak + rakitan pratinjau (servo, kamera, kabel) |
-| `fusion/skrip/` | Skrip Python Fusion yang membangun seluruh model dan menjalankan cek tabrakan, gerak, dan jalur kabel |
-| `firmware/D435_gimbal_ESP32C3/` | Firmware ESP32-C3 (Arduino) |
-| `firmware/uji_simulasi/` | Simulasi fisik di komputer untuk menguji firmware tanpa alat |
-| `docs/` | Aplikasi web pengatur (Bluetooth / USB) dan skema rangkaian |
-| `PANDUAN.md` | Panduan lengkap: belanja, cetak, rakit, solder, firmware, kalibrasi |
-| `gambar/` | Render model, skema, tangkapan layar aplikasi |
+| `stl/` | 16 berkas STL siap cetak (satu berkas untuk satu bagian) dan `RENCANA_CETAK.md`. `semua_part_satu_pelat.stl` memuat seluruh bagian dalam satu pelat 220 × 220 mm |
+| `fusion/D435_gimbal.f3d` | Model Fusion 360 lengkap: tata letak cetak dan rakitan pratinjau (servo, kamera, kabel) |
+| `fusion/skrip/` | Skrip Python Fusion yang membangun seluruh model serta memeriksa tabrakan, rentang gerak, dan jalur kabel |
+| `firmware/D435_gimbal_ESP32C3/` | Firmware ESP32-C3 (Arduino). Berkas `web_files.h` berisi aplikasi web yang ikut tertanam |
+| `firmware/uji_simulasi/` | Simulasi fisik untuk menguji firmware di komputer tanpa perangkat keras |
+| `docs/` | Aplikasi web dan skema rangkaian (juga diterbitkan di GitHub Pages untuk mode demo) |
+| `tools/embed_web.py` | Memasukkan isi `docs/` ke `web_files.h` setelah aplikasi diubah |
+| `PANDUAN.md` / [`GUIDE.en.md`](GUIDE.en.md) | Panduan lengkap: belanja, pencetakan, perakitan, penyolderan, firmware, dan kalibrasi |
+| `gambar/` | Render model, skema, dan tangkapan layar aplikasi |
 | `arsip/` | Desain awal (dudukan sabuk tanpa gimbal) dan ekspor lama |
 
 ## Aplikasi pengatur
 
-Buka **https://khaichi11.github.io/stabilizer_camera/** di Chrome atau Edge (Android, Windows, macOS, Linux). Di iPhone pakai browser Bluefy. Ada mode demo untuk mencoba tanpa alat.
+**Menghubungkan lewat WiFi (ponsel atau iPad):**
+1. Aktifkan hotspot ponsel, lalu nyalakan gimbal. Gimbal akan terhubung sendiri ke hotspot yang sudah dikenalnya.
+2. Pada ponsel atau iPad yang terhubung ke hotspot tersebut, buka **http://gimbal-d435.local** di Safari atau Chrome.
+3. Masukkan sandi (bawaan `123456`).
 
-Layar utamanya berisi **digital twin 3D**, yaitu model gimbal dari Fusion yang bergerak langsung mengikuti data sensor:
-- badan dan klip sabuk ikut miring seperti badanmu;
-- rangka dan dudukan kamera berputar sebesar koreksi servo;
-- kamera tetap di sudut target.
+**Pada pemakaian pertama**, gimbal belum mengenal hotspot Anda sehingga gimbal memancarkan WiFi sendiri:
+1. Hubungkan ponsel ke WiFi **Gimbal-D435-xxxx** (sandi `gimbald435`).
+2. Buka **http://192.168.4.1**.
+3. Pada menu **Perangkat → WiFi**, tekan *Cari hotspot*, pilih hotspot ponsel Anda, lalu masukkan sandinya.
 
-- Label kecil menempel di tiap servo dan menunjukkan sudutnya.
-- Mode **Tembus** membuat bagian cetak transparan, sehingga servo, ESP32, dan MPU6050 di dalamnya terlihat.
-- Model 3D tetap terlihat saat kamu mengatur PID, kalibrasi, atau pengaturan lain.
+Setelah itu aplikasi menampilkan alamat baru gimbal, dan WiFi milik gimbal nonaktif dengan sendirinya. Apabila kelak hotspot tidak ditemukan selama 20 detik, WiFi milik gimbal aktif kembali.
 
-Aplikasi juga jalan di **iPad**: buka lewat browser Bluefy (Safari belum mendukung Bluetooth web), lalu bisa ditambahkan ke layar utama seperti aplikasi biasa.
+Hal-hal yang perlu diketahui:
+- Ponsel tetap dapat memakai data seluler, karena gimbal yang bergabung ke hotspot, bukan sebaliknya.
+- Jika alamat `.local` tidak dapat dibuka (terjadi pada sebagian ponsel Android), gunakan alamat IP yang tertera di menu Perangkat.
+- Beberapa ponsel atau iPad dapat terhubung bersamaan. Semuanya menampilkan data yang sama, dan aplikasi memberi tahu apabila ada perangkat lain yang terhubung.
+- Koneksi USB dari komputer (Chrome/Edge) dan **mode demo** tetap tersedia di **https://khaichi11.github.io/stabilizer_camera/**.
 
-| HP | iPad / komputer |
+| Layar awal | Ponsel |
 |---|---|
-| ![Aplikasi di HP](gambar/aplikasi_hp.png) | ![Aplikasi di iPad](gambar/aplikasi_ipad.png) |
+| ![Layar awal](gambar/aplikasi_awal.png) | ![Aplikasi di ponsel](gambar/aplikasi_hp.png) |
 
-| Layar awal | Tembus pandang + uji respons |
+| iPad / laptop | Tampilan tembus pandang dan uji respons |
 |---|---|
-| ![Layar awal](gambar/aplikasi_awal.png) | ![Mode tembus pandang](gambar/aplikasi_tembus_pid.png) |
+| ![Aplikasi di iPad](gambar/aplikasi_ipad.png) | ![Tampilan tembus pandang](gambar/aplikasi_tembus_pid.png) |
 
-- Sudut nunduk 25/30/35/40/45° atau geser 10–60°, kiri-kanan, mode Stabil / Tengah / Manual / Mati.
-- Kalibrasi otomatis: mendeteksi arah IMU, kabel servo tertukar, arah dan skala tiap servo.
-- Kalibrasi datar memakai waterpass / aplikasi waterpass di HP, supaya benar-benar lurus.
-- PID (P, I, D), dead band, penghalus, kecepatan servo, filter sensor, uji respons dengan grafik dan CSV.
-- Diagnostik: penyebab restart (termasuk tegangan turun), status IMU, log kejadian, laporan debug, rekam 30 detik, terminal perintah.
-- Sandi Bluetooth (bawaan `123456`). Sandi tidak pernah dikirim lewat udara: dipakai tantangan acak + SHA-256, dan Bluetooth dikunci 30 detik setelah 5 kali salah.
-- Tanda tersambung: status hijau, bunyi + getar di HP, LED biru ESP32 menyala terus, dan kamera mengangguk kecil.
+Layar utama menampilkan **kembaran digital 3D** (*digital twin*): model gimbal dari Fusion yang bergerak mengikuti data sensor.
+- Badan gimbal dan klip sabuk miring mengikuti gerak tubuh Anda.
+- Rangka dan dudukan kamera berputar sebesar koreksi servo.
+- Kamera tetap berada pada sudut target.
+- Label kecil pada setiap servo menunjukkan sudutnya.
+- Tampilan **Tembus pandang** membuat bagian cetak transparan.
+- Tanda **Berjalan** muncul ketika langkah kaki terdeteksi.
 
-## Yang perlu dibeli
+Yang dapat diatur:
+- Sudut atas-bawah 25/30/35/40/45° atau nilai bebas 10–60°, sudut kanan-kiri, serta mode Stabil, Tengah, Manual, dan Nonaktif.
+- Kalibrasi otomatis: orientasi IMU, kabel servo yang tertukar, serta arah, skala, dan kecepatan masing-masing servo.
+- Kalibrasi datar dengan waterpass atau aplikasi waterpass di ponsel, agar kamera benar-benar lurus.
+- PID, peredaman gerak badan, prediksi, zona mati servo, frekuensi denyut servo, filter sensor, dan uji respons lengkap dengan grafik dan CSV.
+- WiFi: pencarian dan pemilihan hotspot, alamat gimbal, serta sandi WiFi milik gimbal.
+- Diagnostik: penyebab mulai ulang (termasuk tegangan turun), status IMU, log kejadian, laporan debug, perekaman 30 detik, dan terminal perintah.
+- Sandi aplikasi (bawaan `123456`). Sandi tidak pernah dikirim: aplikasi menjawab tantangan acak dengan SHA-256, dan koneksi dikunci 30 detik setelah lima kali salah.
 
-- 2× servo **MG90S 180°** (metal gear), bukan versi 360°
+![Kartu WiFi](gambar/aplikasi_wifi.png)
+
+## Cara kerja stabilisasi
+
+IMU terpasang di bawah kamera, sehingga yang diukur adalah orientasi kamera itu sendiri. Empat bagian bekerja bersama:
+
+1. **Pembacaan sudut yang tahan terhadap langkah kaki.** Arah gravitasi dihitung sebagai vektor. Gyro memutar vektor itu setiap 5 ms, sedangkan akselerometer mengoreksinya secara perlahan. Ketika langkah kaki terdeteksi, akselerometer diberi bobot lebih kecil tetapi merata, sehingga dorongan maju-mundur pada setiap langkah tidak terbaca sebagai kemiringan.
+2. **Peredaman gerak badan (umpan maju).** Gerak badan dihitung sebagai sudut kamera dikurangi posisi servo menurut model servo. Servo langsung diperintah untuk melawan gerak tersebut, ditambah prediksi untuk menutupi jeda servo. Dengan demikian, servo tidak perlu menunggu kamera ikut miring.
+3. **PID** mengoreksi sisanya (skala servo, posisi horn, beban) dan menjaga kamera tepat pada target.
+4. **Gerak servo yang halus.**
+   - Denyut perintah servo dikirim 100 kali per detik (bukan 50), sehingga gerak servo tidak patah-patah dan tidak menambah getaran cepat (efek *jello* pada video).
+   - Model servo memperhitungkan zona mati servo, sehingga servo tidak dipaksa bergerak bolak-balik dan tidak berdengung.
+
+Hasil simulasi fisik, dengan pola jalan realistis pada sabuk (ayunan kanan-kiri setiap dua langkah, ayunan atas-bawah setiap langkah, dan hentakan tumit):
+
+| | Tanpa gimbal | Firmware lama | Sekarang |
+|---|---|---|---|
+| Sisa guncangan atas-bawah (RMS) | 6,2° | 2,5° | **0,4°** |
+| Sisa guncangan kanan-kiri (RMS) | 9,5° | 1,0° | **0,2–0,3°** |
+| Getaran cepat di atas 5 Hz, atas-bawah | 12,7 °/s | – | **14–17 °/s** |
+| Waktu hingga kamera berada dalam 1° dari target baru (uji 5°) | – | – | **65 ms** |
+
+Keterbatasan desain: gimbal dua sumbu tidak dapat meredam putaran mendatar (*yaw*) kamera yang terjadi ketika pinggang berputar.
+
+## Daftar belanja
+
+- 2× servo **MG90S 180°** (gigi logam), bukan versi 360°
 - 1× **MPU6050** (modul GY-521)
 - 1× **ESP32-C3 Super Mini**
-- 1× kapasitor elco **100–470 µF**, badan maksimal Ø6,3 × 11 mm (misalnya 100 µF 25V)
-- Power bank 5 V ≥ 2 A + kabel USB-A ke USB-C
+- 1× kapasitor elektrolit **100–470 µF** dengan badan maksimal Ø6,3 × 11 mm (misalnya 100 µF 25 V)
+- Power bank 5 V ≥ 2 A dan kabel USB-A ke USB-C
 - Kabel USB-C tipis untuk D435
-- Sekrup self-tapping 2× M2 × 6 dan 2× M2 × 4
-- Kabel jumper female-male 20 cm (kepalanya digunting) atau kabel silikon 28 AWG, heat shrink
-- Opsional: 2 kabel ties ≤ 4,8 mm
+- Sekrup *self-tapping* 2× M2 × 6 dan 2× M2 × 4
+- Kabel jumper *female-male* 20 cm (kepalanya dipotong) atau kabel silikon 28 AWG, serta selongsong bakar (*heat shrink*)
+- Opsional: 2 kabel ties dengan lebar ≤ 4,8 mm
 
-Tidak perlu resistor, baterai, atau modul daya.
+Resistor, baterai, dan modul daya tidak diperlukan.
 
 ## Rangkaian
 
 ![Skema rangkaian](gambar/skema_rangkaian.png)
 
-| Pin ESP32-C3 | Ke |
+| Pin ESP32-C3 | Tersambung ke |
 |---|---|
-| 5V | merah kedua servo + kapasitor (+) |
-| G | coklat kedua servo + GND IMU + kapasitor (−) |
+| 5V | kabel merah kedua servo dan kaki positif kapasitor |
+| G | kabel cokelat kedua servo, GND IMU, dan kaki negatif kapasitor |
 | 3V3 | VCC IMU |
-| GPIO3 | sinyal servo nunduk |
-| GPIO4 | sinyal servo kiri-kanan |
+| GPIO3 | sinyal servo putar atas-bawah |
+| GPIO4 | sinyal servo putar kanan-kiri |
 | GPIO6 / GPIO7 | SDA / SCL IMU |
-| USB-C | power bank (juga untuk upload firmware) |
+| USB-C | power bank (juga untuk mengunggah firmware) |
 
-## Cetak
+## Pencetakan
 
 Lihat `stl/RENCANA_CETAK.md`. Ringkasnya:
 
-- Semua part tanpa support.
+- Semua bagian dicetak tanpa penyangga.
 - Ulir M6 dan 1/4" sudah dimodelkan dengan kelonggaran 0,15 mm.
-- Cetak uji G_Nut_M6 + G_BeltScrew_1 dulu.
-- G_Base butuh dinding (perimeter) lebih banyak karena klip sabuknya menahan beban.
+- Cetak uji G_Nut_M6 dan G_BeltScrew_1 terlebih dahulu.
+- G_Base memerlukan dinding (*perimeter*) lebih banyak karena klip sabuknya menahan beban.
 
 ![Pelat cetak](gambar/gimbal_pelat_cetak.png)
 
 ## Firmware
 
 1. Arduino IDE → Boards Manager → **esp32 by Espressif Systems** versi 3.x.
-2. Board **ESP32C3 Dev Module**, **USB CDC On Boot: Enabled**. Partition Scheme bawaan sudah cukup: firmware berukuran ±711 KB, sekitar 54% ruang aplikasi.
-3. Buka `firmware/D435_gimbal_ESP32C3/D435_gimbal_ESP32C3.ino`, lalu upload. Tidak perlu library tambahan.
-4. Buka aplikasi, sambungkan, lalu jalankan **Kalibrasi otomatis** dan **Kalibrasi datar**.
+2. Pilih board **ESP32C3 Dev Module**, **USB CDC On Boot: Enabled**, dan **Partition Scheme: Huge APP (3MB No OTA/1MB SPIFFS)**. Partisi besar ini diperlukan karena aplikasi web ikut tertanam di dalam firmware.
+3. Buka `firmware/D435_gimbal_ESP32C3/D435_gimbal_ESP32C3.ino` (berkas `web_files.h` harus berada di folder yang sama), lalu unggah. Tidak diperlukan pustaka tambahan.
+4. Ikuti langkah pemakaian pertama di atas, kemudian jalankan **kalibrasi otomatis** dan **kalibrasi datar**.
 
-Sebelum dikalibrasi, servo ditahan di tengah supaya tidak bergerak liar.
+Sebelum dikalibrasi, kedua servo ditahan di posisi tengah agar tidak bergerak liar.
 
-Perintah teks (Serial Monitor 115200 atau Terminal di aplikasi): `HELP`, `GET`, `STATUS`, `SET <kunci> <nilai>`, `MODE stab|center|manual|off`, `CAL auto|gyro|level`, `STEP p 5`, `PIN <baru>`.
+Setiap kali aplikasi di `docs/` diubah, jalankan `python3 tools/embed_web.py` agar perubahan ikut masuk ke firmware. CI akan gagal apabila langkah ini terlewat.
+
+Perintah teks (Serial Monitor 115200 atau terminal di aplikasi): `HELP`, `GET`, `STATUS`, `SET <kunci> <nilai>`, `MODE stab|center|manual|off`, `CAL auto|gyro|level`, `STEP p 5`, `PIN <baru>`, `WIFI`, `WIFI SCAN`.
 
 ## Uji simulasi firmware
 
-Setiap push otomatis diuji GitHub Actions (badge di atas):
-- firmware di-compile dengan Arduino CLI + ESP32 core 3.3.12 asli, hasilnya 0 error dan 0 peringatan;
-- simulasi fisik di bawah ini dijalankan.
+Setiap *push* diuji otomatis oleh GitHub Actions (lencana di atas):
+- firmware dikompilasi dengan Arduino CLI dan inti ESP32 asli;
+- aplikasi yang tertanam diperiksa kesamaannya dengan isi `docs/`;
+- simulasi fisik dijalankan, ditambah ringkasan untuk servo yang lebih lambat, zona mati yang besar, dan gigi yang longgar.
 
-
-Firmware asli dijalankan di komputer melawan model fisik: dua servo dengan dead band dan backlash, sensor ber-noise yang terpasang terbalik, kabel servo tertukar, dan badan yang berjalan.
+Simulasi menjalankan firmware asli di komputer terhadap model fisik yang meliputi:
+- dua servo yang hanya membaca denyut setiap 10–20 ms, lengkap dengan zona mati, jeda, kecepatan maksimal, dan kelonggaran gigi;
+- MPU6050 dengan filter internalnya, terpasang terbalik dan sedikit miring, dengan bias gyro;
+- kabel servo yang tertukar;
+- tubuh yang berjalan;
+- ponsel atau iPad tiruan yang membuka aplikasi lewat WiFi.
 
 ```
 cd firmware/uji_simulasi
 g++ -std=gnu++17 -O2 -I mock -include array sim.cpp -o sim && ./sim
 ```
 
-Hasil saat ini: semua cek lolos.
-- Kalibrasi otomatis menemukan sumbu IMU, kabel tertukar, dan arah servo.
-- Setelah kalibrasi datar, kamera di 35,0° / 0,0° dengan selisih ≤ 0,25°.
-- Saat berjalan, goyangan kamera turun dari sekitar ±10° menjadi sekitar ±1,5°.
-- Sandi, kunci 5 kali salah, IMU lepas dan tersambung lagi, serta penyimpanan pengaturan juga diuji.
+Aspek yang diperiksa (semuanya lolos):
+- kalibrasi otomatis (sumbu IMU, kabel tertukar, serta arah, skala, dan kecepatan servo);
+- setelah kalibrasi datar, kamera berada pada 35,0° / 0,0° dengan selisih ≤ 0,25°;
+- sisa guncangan saat berjalan di bawah 0,8° RMS;
+- getaran cepat yang ditambahkan servo tetap kecil;
+- servo diam tanpa berdengung;
+- respons cepat tanpa lonjakan berlebih;
+- aplikasi tersaji lengkap (gzip, ETag);
+- WebSocket, sandi, penguncian setelah lima kali salah, dua perangkat sekaligus, dan perangkat yang macet tidak memperlambat gimbal;
+- perpindahan ke hotspot dan kembali ke WiFi milik gimbal;
+- IMU yang terputus lalu terbaca kembali;
+- pengaturan tersimpan setelah dinyalakan ulang, termasuk pengaturan dari firmware 4.0 yang tetap terpakai setelah pembaruan.
 
 ## Model Fusion
 
-`fusion/skrip/D435_gimbal.py` adalah gabungan `sumber/geom.py` + `sumber/checks.py` + `sumber/stage2.py`. Jalankan skrip itu di Fusion (Utilities → Scripts) untuk membangun ulang model. Skrip yang sama:
+`fusion/skrip/D435_gimbal.py` merupakan gabungan `sumber/geom.py`, `sumber/checks.py`, dan `sumber/stage2.py`. Jalankan skrip tersebut di Fusion (Utilities → Scripts) untuk membangun ulang model. Skrip yang sama:
 - mengekspor STL ke `print_ready`;
-- menulis `build_log.txt` berisi hasil cek kecocokan part, 55 posisi gerak, jalur pemasangan, dan jalur kelima kabel.
+- menulis `build_log.txt` yang memuat hasil pemeriksaan kecocokan bagian, 55 posisi gerak, jalur pemasangan, dan jalur kelima kabel.
 
-Panduan lengkap merakit ada di [PANDUAN.md](PANDUAN.md).
+Panduan perakitan lengkap tersedia di [PANDUAN.md](PANDUAN.md).
