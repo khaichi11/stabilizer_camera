@@ -1,3 +1,5 @@
 *.stl binary
 *.f3d binary
 *.png binary
+*.webp binary
+firmware/D435_gimbal_ESP32C3/web_files.h linguist-generated=true -diff
