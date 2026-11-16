@@ -45,11 +45,33 @@ def build():
     out.append(f"static const int WEB_FILES_N = {len(FILES)};  // {total} bytes in flash")
     return "\n".join(out) + "\n", total
 
+def check():
+    """Compares what the header holds (unzipped) with docs/. Not the gzip bytes: another zlib build
+    may compress the same file slightly differently."""
+    import re
+    if not OUT.exists():
+        return "web_files.h is missing"
+    text = OUT.read_text()
+    arrays = {int(m.group(1)): bytes(int(x) for x in m.group(2).replace("\n", "").split(",") if x.strip())
+              for m in re.finditer(r"static const uint8_t WF(\d+)\[\] = \{(.*?)\};", text, re.S)}
+    rows = re.findall(r'\{"([^"]+)", "([^"]+)", "\\"([0-9a-f]+)\\"", WF(\d+), (\d+)\}', text)
+    if len(rows) != len(FILES):
+        return "the file list changed"
+    for (path, src, ctype), (hp, ht, he, hi, hl) in zip(FILES, rows):
+        raw = (DOCS / src).read_bytes()
+        data = arrays.get(int(hi), b"")
+        if (path, ctype) != (hp, ht) or len(data) != int(hl) or he != "%08x" % zlib.crc32(raw):
+            return f"{src} changed"
+        if gzip.decompress(data) != raw:
+            return f"{src} differs"
+    return None
+
 if __name__ == "__main__":
-    text, total = build()
     if "--check" in sys.argv:
-        if not OUT.exists() or OUT.read_text() != text:
-            print("web_files.h is out of date: run python3 tools/embed_web.py"); sys.exit(1)
-        print(f"web_files.h up to date ({total} bytes)"); sys.exit(0)
+        why = check()
+        if why:
+            print(f"web_files.h is out of date ({why}): run python3 tools/embed_web.py"); sys.exit(1)
+        print("web_files.h matches docs/"); sys.exit(0)
+    text, total = build()
     OUT.write_text(text)
     print(f"wrote {OUT.relative_to(ROOT)}: {len(FILES)} files, {total} bytes gzip")
