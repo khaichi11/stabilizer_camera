@@ -107,6 +107,8 @@ small{color:var(--tx2);font-size:13px}
 .viewbtns button{border:0;background:transparent;color:var(--tx2);font:500 12.5px var(--ui);padding:6px 10px;border-radius:7px;cursor:pointer;display:flex;align-items:center}
 .viewbtns button[aria-pressed=true]{background:rgba(255,255,255,.1);color:var(--tx)}
 .warn3d{position:absolute;left:10px;top:10px;max-width:56%;padding:7px 10px;font-size:12.5px;color:#F6C77A}
+.walk3d{position:absolute;left:10px;top:10px;padding:6px 10px;font-size:12.5px;color:var(--tx2);display:flex;align-items:center;gap:7px}
+.walk3d i{width:7px;height:7px;border-radius:50%;background:#7FB77E}
 .tag{position:absolute;left:0;top:0;transform:translate(-50%,-100%);pointer-events:none;white-space:nowrap;font-size:11px;color:var(--tx2);padding:4px 8px 5px;will-change:transform;line-height:1.25}
 .tag b{display:block;font:600 14px var(--disp);color:var(--tx);font-variant-numeric:tabular-nums}
 .readbar{position:absolute;left:10px;right:10px;bottom:10px;display:grid;grid-template-columns:1fr 1fr;padding:8px 4px}
@@ -202,6 +204,17 @@ dialog{border:0;border-radius:14px;padding:20px;width:min(92vw,380px);background
 dialog::backdrop{background:rgba(0,0,0,.6)}
 dialog form{display:grid;gap:14px}
 .demo-flag{display:none}
+.steps{max-width:460px;width:100%;text-align:left;background:var(--s1);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:6px 0 4px}
+.steps h2{font-size:15px;margin:0 0 8px}
+.steps ol{margin:0 0 10px;padding-left:20px;display:grid;gap:6px;color:var(--tx)}
+.steps a{color:var(--amber)}
+.steps p{margin:0;font-size:13.5px;line-height:1.5}
+.wlist{display:grid;gap:6px;margin:4px 0 10px}
+.wlist button{display:flex;justify-content:space-between;align-items:center;gap:10px;text-align:left;padding:9px 12px;border:1px solid var(--line);background:var(--s1);color:var(--tx);border-radius:var(--rs);font:inherit;cursor:pointer}
+.wlist button small{flex:none}
+.addr{display:grid;gap:4px;margin:10px 0 2px;padding:12px 14px;border-radius:10px;background:rgba(127,183,126,.1);border:1px solid rgba(127,183,126,.35)}
+.addr b{font-size:17px;font-family:var(--disp)}
+.addr a{color:var(--tx);text-decoration:underline;text-decoration-color:rgba(127,183,126,.6);text-underline-offset:3px}
 .demochip{display:none;font-size:12px;font-weight:600;color:var(--amberInk);background:var(--amber);border-radius:999px;padding:3px 9px}
 body.demo .demochip{display:inline-block}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
@@ -212,25 +225,30 @@ body.demo .demochip{display:inline-block}
 <header class="bar"><div class="bar-in">
   <b id="devName">Gimbal D435</b>
   <span class="demochip" title="Semua angka berasal dari simulasi di browser, bukan dari gimbal">Demo</span>
-  <span class="chip" id="pill" data-s="idle" role="status" aria-live="polite"><i></i><span id="pillText">Belum tersambung</span><span id="pillSub" class="pnm"></span></span>
+  <span class="chip" id="pill" data-s="idle" role="status" aria-live="polite"><i></i><span id="pillText">Belum terhubung</span><span id="pillSub" class="pnm"></span></span>
   <div class="right"><button class="btn ghost sm" id="btnDisconnect" hidden aria-label="Putuskan sambungan"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v8M6.3 7.3a8 8 0 1 0 11.4 0"/></svg><span class="lbl">Putuskan</span></button></div>
 </div></header>
 
 <!-- ======================================================= connect -->
 <section class="connect" id="connect">
-  <img class="hero" src="img/gimbal.png" alt="Gimbal D435 dari model Fusion 360: klip sabuk kuning, servo biru, kamera hitam" width="1000" height="746">
-  <h1>Gimbal sabuk D435</h1>
-  <p class="lead">Kamera tetap menunduk di sudut pilihanmu walau badan bergerak.</p>
+  <img class="hero" src="img/gimbal.webp" alt="Gimbal D435: klip sabuk, dua servo, kamera RealSense di depan" width="1000" height="746">
+  <h1>Kamera tetap stabil saat Anda berjalan</h1>
+  <p class="lead" id="leadTxt">Atur sudut D435, lakukan kalibrasi, dan pantau gerak gimbal secara langsung dari ponsel atau iPad.</p>
   <div class="btns">
-    <button class="btn primary" id="btnBle">Sambung Bluetooth</button>
-    <button class="btn" id="btnUsb">Sambung USB</button>
+    <button class="btn primary" id="btnWifi" hidden>Hubungkan</button>
+    <button class="btn" id="btnUsb">Hubungkan lewat USB</button>
   </div>
-  <p class="note" id="supportNote"></p>
-  <div class="how">
-    <div><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFB21E" stroke-width="2" stroke-linecap="round"><path d="M7 7l10 10-5 5V2l5 5L7 17"/></svg><span><b style="color:var(--tx)">Bluetooth:</b> pilih "Gimbal D435", sandi bawaan 123456.</span></div>
-    <div><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFB21E" stroke-width="2" stroke-linecap="round"><rect x="7" y="3" width="10" height="7" rx="1"/><path d="M12 10v11M9 21h6"/></svg><span><b style="color:var(--tx)">USB:</b> dari komputer, tanpa sandi.</span></div>
+  <p class="note" id="supportNote" hidden></p>
+  <div class="steps" id="howWifi">
+    <h2>Menghubungkan lewat WiFi</h2>
+    <ol>
+      <li>Aktifkan hotspot ponsel, lalu nyalakan gimbal.</li>
+      <li>Pada ponsel atau iPad yang terhubung ke hotspot tersebut, buka <a href="http://gimbal-d435.local/" id="hostLink">gimbal-d435.local</a> di Safari atau Chrome.</li>
+      <li>Masukkan sandi. Sandi bawaan: 123456.</li>
+    </ol>
+    <p class="muted">Pemakaian pertama: gimbal belum mengenal hotspot Anda. Hubungkan ponsel ke WiFi <b>Gimbal-D435-…</b> (sandi <b>gimbald435</b>), buka <b>192.168.4.1</b>, lalu masukkan data hotspot di menu Perangkat.</p>
   </div>
-  <button class="link" id="btnDemo">Coba mode demo tanpa alat</button>
+  <button class="link" id="btnDemo">Coba demo tanpa perangkat</button>
 </section>
 
 <!-- ======================================================= app -->
@@ -239,30 +257,31 @@ body.demo .demochip{display:inline-block}
   <aside class="live">
     <div class="stage" id="twinWrap">
       <div id="twin" aria-label="Model 3D gimbal yang bergerak mengikuti data sensor"></div>
-      <img id="twinFallback" src="img/gimbal.png" alt="" hidden>
-      <div class="glass tag" id="tagP">servo nunduk<b>--</b></div>
-      <div class="glass tag" id="tagR">servo kiri-kanan<b>--</b></div>
+      <img id="twinFallback" src="img/gimbal.webp" alt="" hidden>
+      <div class="glass tag" id="tagP">servo putar atas-bawah<b>--</b></div>
+      <div class="glass tag" id="tagR">servo putar kanan-kiri<b>--</b></div>
       <div class="glass warn3d" id="chWarn" hidden></div>
+      <div class="glass walk3d" id="chWalk" hidden><i></i>Berjalan</div>
       <div class="glass viewbtns" role="group" aria-label="Tampilan 3D">
         <button id="viewSolid" aria-pressed="true">Padat</button>
-        <button id="viewXray" aria-pressed="false" title="Bagian cetak transparan, isi dalamnya terlihat">Tembus</button>
+        <button id="viewXray" aria-pressed="false" title="Bagian cetak dibuat transparan sehingga komponen di dalamnya terlihat">Tembus pandang</button>
         <button id="twinReset" aria-label="Kembalikan sudut pandang 3D" title="Kembalikan sudut pandang"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4h4"/></svg></button>
       </div>
       <div class="glass readbar">
-        <div class="rd"><div class="k"><span>kamera nunduk</span><span class="d num" id="rPitchDiff"></span></div><div class="v num" id="rPitch">--</div></div>
-        <div class="rd"><div class="k"><span>kiri-kanan</span><span class="d num" id="rRollDiff"></span></div><div class="v num" id="rRoll">--</div></div>
+        <div class="rd"><div class="k"><span>sudut atas-bawah</span><span class="d num" id="rPitchDiff"></span></div><div class="v num" id="rPitch">--</div></div>
+        <div class="rd"><div class="k"><span>sudut kanan-kiri</span><span class="d num" id="rRollDiff"></span></div><div class="v num" id="rRoll">--</div></div>
       </div>
     </div>
   </aside>
 
   <main class="pages">
     <div class="ctrl">
-      <div class="presets" id="presets" aria-label="Target nunduk cepat">
+      <div class="presets" id="presets" aria-label="Pilihan cepat sudut atas-bawah">
         <button data-p="25">25°</button><button data-p="30">30°</button><button data-p="35">35°</button><button data-p="40">40°</button><button data-p="45">45°</button>
       </div>
       <div class="fine">
         <button class="btn sm ghost" id="pMinus" aria-label="Kurangi 0,5 derajat">−0,5</button>
-        <input type="range" id="pitchSlider" min="10" max="60" step="0.5" value="35" aria-label="Target nunduk">
+        <input type="range" id="pitchSlider" min="10" max="60" step="0.5" value="35" aria-label="Target sudut atas-bawah">
         <button class="btn sm ghost" id="pPlus" aria-label="Tambah 0,5 derajat">+0,5</button>
         <span class="num" id="pitchSetTxt">35,0°</span>
       </div>
@@ -271,77 +290,77 @@ body.demo .demochip{display:inline-block}
     <div class="panel on" id="t-kontrol" role="tabpanel">
       <div class="card">
         <header><h2>Mode</h2><p id="modeHelp">Stabil: kamera dijaga di sudut target.</p></header>
-        <div class="seg" id="modeSeg"><button data-m="stab">Stabil</button><button data-m="center">Tengah</button><button data-m="manual">Manual</button><button data-m="off">Mati</button></div>
+        <div class="seg" id="modeSeg"><button data-m="stab">Stabil</button><button data-m="center">Tengah</button><button data-m="manual">Manual</button><button data-m="off">Nonaktif</button></div>
       </div>
       <div class="card">
         <div class="field">
-          <div class="t2"><h2>Target kiri-kanan</h2><span class="val" id="rollSetTxt">0,0°</span></div>
-          <input type="range" id="rollSlider" min="-15" max="15" step="0.5" value="0" aria-label="Target kiri-kanan">
+          <div class="t2"><h2>Target sudut kanan-kiri</h2><span class="val" id="rollSetTxt">0,0°</span></div>
+          <input type="range" id="rollSlider" min="-15" max="15" step="0.5" value="0" aria-label="Target sudut kanan-kiri">
           <div class="row"><button class="btn sm ghost" id="rollZero">Datarkan (0°)</button></div>
-          <p>Biasanya 0° (cakrawala datar).</p>
+          <p>Umumnya 0° (cakrawala datar).</p>
         </div>
       </div>
       <div class="card" id="manualBlk" hidden>
         <header><h2>Gerak manual</h2><p>Sudut servo dari posisi tengah.</p></header>
-        <div class="field"><div class="t2"><span>Servo nunduk</span><span class="val" id="manPTxt">0,0°</span></div><input type="range" id="manP" min="-25" max="25" step="0.1" value="0"></div>
-        <div class="field"><div class="t2"><span>Servo kiri-kanan</span><span class="val" id="manRTxt">0,0°</span></div><input type="range" id="manR" min="-25" max="25" step="0.1" value="0"></div>
+        <div class="field"><div class="t2"><span>Servo putar atas-bawah</span><span class="val" id="manPTxt">0,0°</span></div><input type="range" id="manP" min="-25" max="25" step="0.1" value="0"></div>
+        <div class="field"><div class="t2"><span>Servo putar kanan-kiri</span><span class="val" id="manRTxt">0,0°</span></div><input type="range" id="manR" min="-25" max="25" step="0.1" value="0"></div>
         <div class="row"><button class="btn sm ghost" id="manZero">Ke tengah</button></div>
       </div>
       <div class="card">
         <header><h2>Selisih dari target, 10 detik</h2></header>
         <canvas class="chart" id="liveChart" width="900" height="170"></canvas>
-        <div class="legend"><span><i style="background:#ECEEF1"></i>nunduk</span><span><i style="background:#F2AE2E"></i>kiri-kanan</span><span><i style="background:#E5534B"></i>servo di batas</span></div>
+        <div class="legend"><span><i style="background:#ECEEF1"></i>atas-bawah</span><span><i style="background:#F2AE2E"></i>kanan-kiri</span><span><i style="background:#E5534B"></i>servo di batas</span></div>
       </div>
     </div>
 
     <!-- ===== KALIBRASI -->
     <div class="panel" id="t-kalibrasi" role="tabpanel">
-      <div class="ph"><h2>Kalibrasi</h2><p>Sekali setelah merakit, berurutan.</p></div>
+      <div class="ph"><h2>Kalibrasi</h2><p>Lakukan sekali setelah perakitan, secara berurutan.</p></div>
       <div class="card steps">
         <div class="step" id="calAutoLi"><span class="n">1</span><div class="b">
           <h3>Kalibrasi otomatis</h3>
-          <p class="muted">Dudukan tegak, kamera menunduk, jangan disentuh ±10 detik.</p>
+          <p class="muted">Tegakkan dudukan seperti saat dipakai, dengan kamera mengarah ke bawah. Jangan disentuh selama ±10 detik.</p>
           <div class="row"><button class="btn primary" id="calAuto">Mulai kalibrasi otomatis</button></div>
           <div class="progress" id="calAutoOut" hidden></div>
         </div></div>
         <div class="step" id="calLevelLi"><span class="n">2</span><div class="b">
           <h3>Kalibrasi datar</h3>
-          <p class="muted">Taruh HP (aplikasi waterpass) di atas D435, isi angka yang terbaca.</p>
+          <p class="muted">Letakkan waterpass atau ponsel (aplikasi waterpass) di atas D435, lalu isi angka yang terbaca.</p>
           <div class="grid2">
-            <label class="field"><span>Nunduk terbaca (°)</span><input type="number" step="0.1" id="lvlPIn" placeholder="contoh 35,0"></label>
-            <label class="field"><span>Kiri-kanan terbaca (°)</span><input type="number" step="0.1" id="lvlRIn" value="0"></label>
+            <label class="field"><span>Sudut atas-bawah terbaca (°)</span><input type="number" step="0.1" id="lvlPIn" placeholder="contoh 35,0"></label>
+            <label class="field"><span>Sudut kanan-kiri terbaca (°)</span><input type="number" step="0.1" id="lvlRIn" value="0"></label>
           </div>
-          <div class="row"><label class="check"><input type="checkbox" id="lvlUseP" checked><span>Pakai nunduk</span></label><label class="check"><input type="checkbox" id="lvlUseR" checked><span>Pakai kiri-kanan</span></label></div>
+          <div class="row"><label class="check"><input type="checkbox" id="lvlUseP" checked><span>Gunakan sudut atas-bawah</span></label><label class="check"><input type="checkbox" id="lvlUseR" checked><span>Gunakan sudut kanan-kiri</span></label></div>
           <div class="row"><button class="btn primary" id="calLevel">Simpan sebagai acuan</button></div>
           <div class="progress" id="calLevelOut" hidden></div>
           <details class="more"><summary>Koreksi halus sambil melihat waterpass</summary><div>
             <p class="muted">0,1° per tekan.</p>
-            <div class="field"><span>Kiri-kanan</span><div class="nudge"><button class="btn sm" data-nudge="lvlr" data-d="0.1">Kiri turun</button><span class="num" id="lvlrTxt">0,00°</span><button class="btn sm" data-nudge="lvlr" data-d="-0.1">Kanan turun</button></div></div>
-            <div class="field"><span>Nunduk</span><div class="nudge"><button class="btn sm" data-nudge="lvlp" data-d="0.1">Lebih tegak</button><span class="num" id="lvlpTxt">0,00°</span><button class="btn sm" data-nudge="lvlp" data-d="-0.1">Lebih nunduk</button></div></div>
+            <div class="field"><span>Kanan-kiri</span><div class="nudge"><button class="btn sm" data-nudge="lvlr" data-d="0.1">Kiri turun</button><span class="num" id="lvlrTxt">0,00°</span><button class="btn sm" data-nudge="lvlr" data-d="-0.1">Kanan turun</button></div></div>
+            <div class="field"><span>Atas-bawah</span><div class="nudge"><button class="btn sm" data-nudge="lvlp" data-d="0.1">Lebih ke atas</button><span class="num" id="lvlpTxt">0,00°</span><button class="btn sm" data-nudge="lvlp" data-d="-0.1">Lebih ke bawah</button></div></div>
           </div></details>
         </div></div>
         <div class="step" id="calGyroLi"><span class="n">3</span><div class="b">
           <h3>Kalibrasi gyro</h3>
-          <p class="muted">Sudah otomatis saat menyala. Jarang perlu.</p>
+          <p class="muted">Dilakukan otomatis setiap gimbal dinyalakan; jarang diperlukan.</p>
           <div class="row"><button class="btn" id="calGyro">Kalibrasi gyro (2 detik)</button></div>
           <div class="progress" id="calGyroOut" hidden></div>
         </div></div>
       </div>
       <div class="card">
-        <header><h2>Posisi tengah servo</h2><p>Di mode Tengah, geser sampai rangka lurus.</p></header>
-        <div class="field"><span>Servo nunduk</span><div class="nudge"><button class="btn sm" data-nudge="trimp" data-d="-5">−5 µs</button><span class="num" id="trimpTxt">0 µs</span><button class="btn sm" data-nudge="trimp" data-d="5">+5 µs</button></div></div>
-        <div class="field"><span>Servo kiri-kanan</span><div class="nudge"><button class="btn sm" data-nudge="trimr" data-d="-5">−5 µs</button><span class="num" id="trimrTxt">0 µs</span><button class="btn sm" data-nudge="trimr" data-d="5">+5 µs</button></div></div>
+        <header><h2>Posisi tengah servo</h2><p>Dalam mode Tengah, geser hingga rangka lurus.</p></header>
+        <div class="field"><span>Servo putar atas-bawah</span><div class="nudge"><button class="btn sm" data-nudge="trimp" data-d="-5">−5 µs</button><span class="num" id="trimpTxt">0 µs</span><button class="btn sm" data-nudge="trimp" data-d="5">+5 µs</button></div></div>
+        <div class="field"><span>Servo putar kanan-kiri</span><div class="nudge"><button class="btn sm" data-nudge="trimr" data-d="-5">−5 µs</button><span class="num" id="trimrTxt">0 µs</span><button class="btn sm" data-nudge="trimr" data-d="5">+5 µs</button></div></div>
       </div>
       <div class="card"><details class="more"><summary>Pengaturan servo dan sensor lanjutan</summary><div>
         <p class="muted">Diisi otomatis oleh kalibrasi.</p>
         <div class="grid2">
-          <label class="field"><span>Arah servo nunduk</span><select data-key="dirp"><option value="1">Normal</option><option value="-1">Terbalik</option></select></label>
-          <label class="field"><span>Arah servo kiri-kanan</span><select data-key="dirr"><option value="1">Normal</option><option value="-1">Terbalik</option></select></label>
-          <label class="field"><span>µs per derajat, nunduk</span><input type="number" step="0.1" data-key="usdegp"></label>
-          <label class="field"><span>µs per derajat, kiri-kanan</span><input type="number" step="0.1" data-key="usdegr"></label>
-          <label class="field"><span>Batas gerak nunduk (±°)</span><input type="number" step="0.5" min="3" max="25" data-key="limp"></label>
-          <label class="field"><span>Batas gerak kiri-kanan (±°)</span><input type="number" step="0.5" min="3" max="25" data-key="limr"></label>
-          <label class="field"><span>Kabel servo</span><select data-key="swap"><option value="0">GPIO3 nunduk, GPIO4 kiri-kanan</option><option value="1">Tertukar (GPIO3 kiri-kanan)</option></select></label>
+          <label class="field"><span>Arah servo putar atas-bawah</span><select data-key="dirp"><option value="1">Normal</option><option value="-1">Terbalik</option></select></label>
+          <label class="field"><span>Arah servo putar kanan-kiri</span><select data-key="dirr"><option value="1">Normal</option><option value="-1">Terbalik</option></select></label>
+          <label class="field"><span>µs per derajat, servo putar atas-bawah</span><input type="number" step="0.1" data-key="usdegp"></label>
+          <label class="field"><span>µs per derajat, servo putar kanan-kiri</span><input type="number" step="0.1" data-key="usdegr"></label>
+          <label class="field"><span>Batas gerak atas-bawah (±°)</span><input type="number" step="0.5" min="3" max="25" data-key="limp"></label>
+          <label class="field"><span>Batas gerak kanan-kiri (±°)</span><input type="number" step="0.5" min="3" max="25" data-key="limr"></label>
+          <label class="field"><span>Kabel servo</span><select data-key="swap"><option value="0">GPIO3 atas-bawah, GPIO4 kanan-kiri</option><option value="1">Tertukar (GPIO3 kanan-kiri)</option></select></label>
           <label class="field"><span>Sumbu MPU6050 (maju, kiri, atas)</span><input type="text" data-key="axes" placeholder="+X+Y+Z" maxlength="6"></label>
         </div>
         <p class="muted" style="font-size:13px">Maksimal ±25° (bebas tabrakan).</p>
@@ -350,22 +369,37 @@ body.demo .demochip{display:inline-block}
 
     <!-- ===== PID -->
     <div class="panel" id="t-pid" role="tabpanel">
-      <div class="ph"><h2>PID</h2><p>Ubah sedikit-sedikit, cek dengan uji respons.</p></div>
+      <div class="ph"><h2>PID</h2><p>Ubah sedikit demi sedikit, lalu periksa dengan uji respons.</p></div>
       <div class="card">
-        <div class="field"><div class="t2"><span><b>P</b> reaksi langsung</span><span class="val" data-show="kp"></span></div><input type="range" data-key="kp" min="0" max="1.5" step="0.05"><p>Lebih besar, lebih cepat. Terlalu besar: bergetar.</p></div>
-        <div class="field"><div class="t2"><span><b>I</b> menarik ke target</span><span class="val" data-show="gain"></span></div><input type="range" data-key="gain" min="1" max="30" step="0.5"><p>Menghapus sisa selisih. Terlalu besar: berayun.</p></div>
-        <div class="field"><div class="t2"><span><b>D</b> peredam dari gyro</span><span class="val" data-show="ff"></span></div><input type="range" data-key="ff" min="0" max="1.5" step="0.05"><p>Meredam goyangan cepat.</p></div>
+        <div class="field"><div class="t2"><span><b>P</b> reaksi langsung</span><span class="val" data-show="kp"></span></div><input type="range" data-key="kp" min="0" max="1.5" step="0.05"><p>Makin besar, makin cepat. Jika terlalu besar, servo bergetar.</p></div>
+        <div class="field"><div class="t2"><span><b>I</b> menarik ke target</span><span class="val" data-show="gain"></span></div><input type="range" data-key="gain" min="1" max="30" step="0.5"><p>Menghapus sisa selisih. Jika terlalu besar, kamera berayun.</p></div>
+        <div class="field"><div class="t2"><span><b>D</b> peredam dari gyro</span><span class="val" data-show="ff"></span></div><input type="range" data-key="ff" min="0" max="1.5" step="0.05"><p>Meredam guncangan cepat.</p></div>
+      </div>
+      <div class="card">
+        <header><h2>Lawan gerak badan</h2><p>Servo langsung melawan gerak badan tanpa menunggu kamera ikut miring.</p></header>
+        <div class="field"><div class="t2"><span>Kekuatan</span><span class="val" data-show="ffb"></span></div><input type="range" data-key="ffb" min="0" max="1" step="0.05"><p>1 = penuh. 0 = hanya PID seperti firmware lama.</p></div>
+        <div class="field"><div class="t2"><span>Prediksi</span><span class="val" data-show="pred"></span></div><input type="range" data-key="pred" min="0" max="1.5" step="0.05"><p>Menutupi jeda servo. Jika terlalu besar, kamera bergerak mendahului.</p></div>
+        <div class="grid2">
+          <label class="field"><span>Jeda servo (ms)</span><input type="number" step="0.5" min="0" max="60" data-key="sdelay"></label>
+          <label class="field"><span>Lambat servo (ms)</span><input type="number" step="0.5" min="5" max="120" data-key="stau"></label>
+        </div>
+        <p class="muted" style="margin:2px 0 12px;font-size:13px">Kedua nilai ini diukur otomatis saat kalibrasi otomatis.</p>
+        <div class="field"><div class="t2"><span>Zona mati servo</span><span class="val" data-show="sdb"></span></div><input type="range" data-key="sdb" min="0" max="20" step="0.5"><p>Perubahan sekecil ini diabaikan oleh servo. Mencegah servo berdengung.</p></div>
+        <div class="field"><div class="t2"><span>Kompensasi zona mati</span><span class="val" data-show="dbcomp"></span></div><input type="range" data-key="dbcomp" min="0" max="10" step="0.5"><p>Mulailah dari 0. Naikkan perlahan jika kamera sedikit tertinggal; turunkan jika servo berdengung.</p></div>
+        <div class="field"><div class="t2"><span>Akselerometer saat berjalan</span><span class="val" data-show="acctauw"></span></div><input type="range" data-key="acctauw" min="0.3" max="10" step="0.1"><p>Makin besar, hentakan langkah makin tidak terbaca sebagai kemiringan.</p></div>
       </div>
       <div class="card">
         <div class="field"><div class="t2"><span>Dead band</span><span class="val" data-show="db"></span></div><input type="range" data-key="db" min="0" max="1.5" step="0.05"><p>Mencegah servo berdengung.</p></div>
-        <div class="field"><div class="t2"><span>Penghalus gerak servo</span><span class="val" data-show="smooth"></span></div><input type="range" data-key="smooth" min="0" max="0.2" step="0.005"><p>Lebih halus, lebih lambat.</p></div>
+        <div class="field"><div class="t2"><span>Penghalus gerak servo</span><span class="val" data-show="smooth"></span></div><input type="range" data-key="smooth" min="0" max="0.2" step="0.005"><p>Makin halus, makin lambat.</p></div>
         <div class="field"><div class="t2"><span>Kecepatan servo maksimal</span><span class="val" data-show="maxrate"></span></div><input type="range" data-key="maxrate" min="60" max="800" step="10"><p>Juga membatasi lonjakan arus.</p></div>
-        <div class="field"><div class="t2"><span>Kepercayaan akselerometer</span><span class="val" data-show="acctau"></span></div><input type="range" data-key="acctau" min="0.1" max="3" step="0.05"><p>Lebih besar: lebih tahan guncangan.</p></div>
+        <div class="field"><div class="t2"><span>Kepercayaan akselerometer</span><span class="val" data-show="acctau"></span></div><input type="range" data-key="acctau" min="0.1" max="3" step="0.05"><p>Makin besar, makin tahan guncangan.</p></div>
+        <label class="field"><span>Denyut servo</span><select data-key="pwmhz"><option value="50">50 Hz, kalau servo panas atau berdengung</option><option value="100">100 Hz (bawaan)</option><option value="150">150 Hz</option><option value="200">200 Hz</option><option value="333">333 Hz, khusus servo digital</option></select></label>
+        <p class="muted" style="margin:-4px 0 12px;font-size:13px">Makin sering, makin halus gerak servo dan makin kecil getaran (efek jello) pada video.</p>
         <label class="field"><span>Filter sensor MPU6050</span><select data-key="dlpf"><option value="0">260 Hz</option><option value="1">184 Hz</option><option value="2">94 Hz</option><option value="3">44 Hz (bawaan)</option><option value="4">21 Hz</option><option value="5">10 Hz</option><option value="6">5 Hz</option></select></label>
       </div>
       <div class="card">
-        <header><h2>Uji respons</h2><p>Bagus: naik &lt; 400 ms, lewat target &lt; 15%.</p></header>
-        <div class="row"><button class="btn" id="stepP">Uji nunduk +5°</button><button class="btn" id="stepR">Uji kiri-kanan +5°</button><button class="btn ghost" id="stepCsv" disabled>Unduh CSV</button></div>
+        <header><h2>Uji respons</h2><p>Hasil yang baik: naik &lt; 150 ms, melewati target &lt; 15%.</p></header>
+        <div class="row"><button class="btn" id="stepP">Uji atas-bawah +5°</button><button class="btn" id="stepR">Uji kanan-kiri +5°</button><button class="btn ghost" id="stepCsv" disabled>Unduh CSV</button></div>
         <canvas class="chart" id="stepChart" width="900" height="170"></canvas>
         <div class="legend"><span><i style="background:#ECEEF1"></i>sudut kamera</span><span><i style="background:#6B737C"></i>target</span></div>
         <div class="metrics" id="stepMetrics"><span>Belum ada data.</span></div>
@@ -377,8 +411,8 @@ body.demo .demochip{display:inline-block}
     <div class="panel" id="t-diag" role="tabpanel">
       <div class="card"><header><h2>Keadaan alat</h2></header><dl class="kv" id="diagKv"></dl><div class="row"><button class="btn sm ghost" id="diagRefresh">Perbarui</button></div></div>
       <div class="card"><header><h2>Kejadian</h2></header><div class="log" id="evLog"><span class="muted">Belum ada kejadian.</span></div></div>
-      <div class="card"><header><h2>Debugging</h2><p>Kirim laporan ini kalau ada masalah.</p></header>
-        <div class="row"><button class="btn" id="copyReport">Salin laporan debug</button><button class="btn" id="recBtn">Rekam 30 detik</button><button class="btn danger" id="rebootBtn">Restart gimbal</button></div></div>
+      <div class="card"><header><h2>Debugging</h2><p>Kirimkan laporan ini jika terjadi masalah.</p></header>
+        <div class="row"><button class="btn" id="copyReport">Salin laporan debug</button><button class="btn" id="recBtn">Rekam 30 detik</button><button class="btn danger" id="rebootBtn">Nyalakan ulang gimbal</button></div></div>
       <div class="card"><header><h2>Terminal</h2><p>Ketik HELP untuk daftar perintah.</p></header>
         <div class="term" id="term" aria-live="off"></div>
         <form id="termForm" class="row" style="flex-wrap:nowrap"><input type="text" id="termIn" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="contoh: STATUS"><button class="btn">Kirim</button></form></div>
@@ -392,29 +426,40 @@ body.demo .demochip{display:inline-block}
           <tr><td><span class="dot" style="background:#D23B2B"></span>5V</td><td>Merah kedua servo (disatukan) + kaki panjang kapasitor</td></tr>
           <tr><td><span class="dot" style="background:#8B6B4E"></span>G</td><td>Coklat kedua servo + GND MPU6050 + kaki pendek kapasitor</td></tr>
           <tr><td><span class="dot" style="background:#7E57C2"></span>3V3</td><td>VCC MPU6050. Jangan ke 5V</td></tr>
-          <tr><td><span class="dot" style="background:#EE8A1E"></span>GPIO3</td><td>Oranye servo nunduk</td></tr>
-          <tr><td><span class="dot" style="background:#EE8A1E"></span>GPIO4</td><td>Oranye servo kiri-kanan</td></tr>
+          <tr><td><span class="dot" style="background:#EE8A1E"></span>GPIO3</td><td>Oranye servo putar atas-bawah</td></tr>
+          <tr><td><span class="dot" style="background:#EE8A1E"></span>GPIO4</td><td>Oranye servo putar kanan-kiri</td></tr>
           <tr><td><span class="dot" style="background:#2E7DBA"></span>GPIO6</td><td>SDA MPU6050</td></tr>
           <tr><td><span class="dot" style="background:#2E9C6E"></span>GPIO7</td><td>SCL MPU6050</td></tr>
           <tr><td>USB-C</td><td>Power bank 5 V ≥ 2 A lewat kabel USB-A ke USB-C</td></tr>
         </table>
-        <p class="note">Tertukar atau terbalik? Kalibrasi otomatis membetulkannya.</p></div>
-      <div class="card"><header><h2>Sandi Bluetooth</h2><p id="pinWarn">Sandi dipakai setiap kali menyambung lewat Bluetooth.</p></header>
+        <p class="note">Kabel tertukar atau sensor terbalik akan diperbaiki oleh kalibrasi otomatis.</p></div>
+      <div class="card" id="wifiCard"><header><h2>WiFi</h2><p id="wifiNow">Belum ada data.</p></header>
+        <div class="addr" id="wifiAddr" hidden></div>
+        <div class="row"><button class="btn" id="wifiScan">Cari hotspot</button></div>
+        <div class="wlist" id="wifiList"></div>
+        <div class="grid2"><label class="field"><span>Nama hotspot</span><input type="text" id="wifiSsid" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="32"></label><label class="field"><span>Sandi hotspot</span><input type="password" id="wifiPass" autocomplete="off" maxlength="63"></label></div>
+        <div class="row"><button class="btn primary" id="wifiJoin">Sambungkan gimbal</button><button class="btn ghost" id="wifiForget">Lupakan hotspot</button></div>
+        <details class="more"><summary>WiFi gimbal sendiri</summary><div>
+          <p class="muted" id="apInfo" style="margin:0">Menyala apabila gimbal tidak menemukan hotspot Anda dalam 20 detik.</p>
+          <div class="row" style="flex-wrap:nowrap"><input type="password" id="apPassIn" placeholder="Sandi baru, 8–32 huruf" maxlength="32" autocomplete="new-password"><button class="btn" id="apPassSave">Ganti</button></div>
+        </div></details>
+        <p class="err" id="wifiErr"></p></div>
+      <div class="card"><header><h2>Sandi aplikasi</h2><p id="pinWarn">Diminta setiap kali ponsel atau iPad terhubung.</p></header>
         <div class="grid2"><label class="field"><span>Sandi baru</span><input type="password" id="pinNew" inputmode="numeric" autocomplete="new-password" maxlength="12"></label><label class="field"><span>Ulangi</span><input type="password" id="pinNew2" inputmode="numeric" autocomplete="new-password" maxlength="12"></label></div>
-        <p class="note">4–12 huruf/angka. Lupa? Sambung lewat USB.</p>
-        <div class="row"><button class="btn primary" id="pinSave">Ganti sandi</button><button class="btn ghost" id="pinForget">Lupakan sandi di browser ini</button></div>
+        <p class="note">4–12 huruf atau angka. Jika lupa, hubungkan lewat USB lalu buat sandi baru.</p>
+        <div class="row"><button class="btn primary" id="pinSave">Ganti sandi</button><button class="btn ghost" id="pinForget">Lupakan sandi di perangkat ini</button></div>
         <p class="err" id="pinErr"></p></div>
       <div class="card"><header><h2>Perilaku</h2></header>
-        <label class="field"><span>Mode saat menyala</span><select data-key="startmode"><option value="0">Stabil</option><option value="1">Tengah</option><option value="2">Manual</option><option value="3">Mati</option></select></label>
-        <label class="check"><input type="checkbox" data-key="nod"><span>Kamera mengangguk saat tersambung</span></label>
+        <label class="field"><span>Mode saat menyala</span><select data-key="startmode"><option value="0">Stabil</option><option value="1">Tengah</option><option value="2">Manual</option><option value="3">Nonaktif</option></select></label>
+        <label class="check"><input type="checkbox" data-key="nod"><span>Kamera mengangguk sekali saat aplikasi terhubung</span></label>
         <label class="check"><input type="checkbox" data-key="led"><span>LED biru ESP32 menunjukkan status</span></label>
-        <label class="check"><input type="checkbox" data-key="bootgyro"><span>Kalibrasi gyro otomatis setiap menyala (kalau diam)</span></label>
+        <label class="check"><input type="checkbox" data-key="bootgyro"><span>Kalibrasi gyro otomatis setiap dinyalakan (jika diam)</span></label>
         <label class="check"><input type="checkbox" data-key="autobias"><span>Ikuti drift gyro saat kamera diam</span></label>
-        <label class="check"><input type="checkbox" id="soundOn" checked><span>Bunyi dan getar di HP saat tersambung atau terputus</span></label>
-        <div class="field"><div class="t2"><span>Kecepatan kirim data</span><span class="val" data-show="tel"></span></div><input type="range" data-key="tel" min="0" max="25" step="1"><p>10× per detik sudah cukup.</p></div></div>
-      <div class="card"><header><h2>Nama Bluetooth</h2><p>Berlaku setelah restart.</p></header>
+        <label class="check"><input type="checkbox" id="soundOn" checked><span>Bunyi dan getar pada ponsel saat terhubung atau terputus</span></label>
+        <div class="field"><div class="t2"><span>Kecepatan kirim data</span><span class="val" data-show="tel"></span></div><input type="range" data-key="tel" min="0" max="25" step="1"><p>20× per detik membuat model 3D bergerak halus.</p></div></div>
+      <div class="card"><header><h2>Nama gimbal</h2><p id="nameNote">Nama ini juga menjadi alamatnya, misalnya gimbal-d435.local. Berlaku setelah dinyalakan ulang.</p></header>
         <div class="row" style="flex-wrap:nowrap"><input type="text" id="nameIn" maxlength="20"><button class="btn" id="nameSave">Simpan</button></div></div>
-      <div class="card"><header><h2>Kembalikan pengaturan</h2><p>Termasuk kalibrasi. Nama dan sandi tetap.</p></header>
+      <div class="card"><header><h2>Kembalikan pengaturan</h2><p>Termasuk kalibrasi. Nama, sandi, dan WiFi tidak berubah.</p></header>
         <div class="row"><button class="btn danger" id="defAll">Kembalikan semua ke bawaan</button></div></div>
     </div>
   </main>
@@ -432,9 +477,9 @@ body.demo .demochip{display:inline-block}
 <div class="toast" id="toast" role="alert"></div>
 <dialog id="pinDlg"><form method="dialog" id="pinForm">
   <h2>Masukkan sandi</h2>
-  <p class="muted" id="pinDlgName">Sandi bawaan 123456. Ganti setelah tersambung.</p>
+  <p class="muted" id="pinDlgName">Sandi bawaan: 123456. Gantilah setelah terhubung.</p>
   <input type="password" id="pinIn" inputmode="numeric" autocomplete="current-password" maxlength="12" required>
-  <label class="check"><input type="checkbox" id="pinRemember" checked><span>Ingat di browser ini</span></label>
+  <label class="check"><input type="checkbox" id="pinRemember" checked><span>Ingat di perangkat ini</span></label>
   <p class="err" id="pinDlgErr"></p>
   <div class="row"><button class="btn primary" value="ok">Sambungkan</button><button class="btn ghost" value="cancel" formnovalidate>Batal</button></div>
 </form></dialog>
@@ -584,9 +629,11 @@ try {
   controls.addEventListener("start", () => (userMoved = true));
   new ResizeObserver(resize).observe(host); resize();
   controls.addEventListener("change", () => (dirty = true));
+  let lastF = performance.now();
   renderer.setAnimationLoop(() => {
+    const nowF = performance.now(), kS = 1 - Math.exp(-Math.min(0.1, (nowF - lastF) / 1000) / 0.045); lastF = nowF;
     let moving = false;
-    for (const k in cur) { const d = tgt[k] - cur[k]; if (Math.abs(d) > 0.01) { cur[k] += d * 0.25; moving = true; } }
+    for (const k in cur) { const d = tgt[k] - cur[k]; if (Math.abs(d) > 0.005) { cur[k] += d * kS; moving = true; } }
     if (moving) apply();
     if (controls.update()) dirty = true;
     if (moving || dirty) { renderer.render(scene, cam); placeTags(); dirty = false; }
@@ -603,7 +650,6 @@ try {
 <!-- ======================================================= app logic -->
 <script>
 "use strict";
-const NUS = "6e400001-b5a3-f393-e0a9-e50e24dcca9e", NUS_RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e", NUS_TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 const NOMINAL = 35;
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -613,23 +659,27 @@ const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { ret
 const S = { link: null, kind: null, authed: false, hello: null, nonce: "", cfg: {}, st: {}, lastRx: 0, tel: [], lastT: null, events: [], cap: null, capRows: [], rec: null, dragging: new Set(), pendingPin: null, reconnecting: false, manualClose: false };
 
 // ======================================================================== links
-class BleLink {
-  constructor() { this.q = Promise.resolve(); this.onLine = null; this.onClose = null; this.buf = ""; }
-  async open() { this.device = await navigator.bluetooth.requestDevice({ filters: [{ services: [NUS] }] }); this.device.addEventListener("gattserverdisconnected", () => this.onClose && this.onClose()); await this.connect(); }
-  async connect() {
-    const server = await this.device.gatt.connect(), svc = await server.getPrimaryService(NUS);
-    this.rx = await svc.getCharacteristic(NUS_RX); this.tx = await svc.getCharacteristic(NUS_TX);
-    this.tx.addEventListener("characteristicvaluechanged", (e) => this.feed(dec.decode(e.target.value)));
-    await this.tx.startNotifications();
+// WiFi: the gimbal serves this page and a WebSocket on the same address
+const QS = new URLSearchParams(location.search);
+const ON_DEVICE = QS.has("ws") || (location.protocol === "http:" && !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname));
+const WS_HOST = QS.get("ws") || location.host;
+class WsLink {
+  constructor(host) { this.host = host; this.onLine = null; this.onClose = null; this.buf = ""; }
+  get name() { return this.host; }
+  open() { return this.connect(); }
+  connect() {
+    return new Promise((ok, bad) => {
+      let opened = false; const ws = new WebSocket("ws://" + this.host + "/ws"); this.ws = ws; this.buf = "";
+      const t = setTimeout(() => { if (!opened) { try { ws.close(); } catch (e) {} bad(new Error("gimbal tidak menjawab")); } }, 6000);
+      ws.onopen = () => { opened = true; clearTimeout(t); ok(); };
+      ws.onmessage = (e) => { if (typeof e.data === "string") this.feed(e.data); };
+      ws.onclose = () => { clearTimeout(t); if (!opened) bad(new Error("tidak dapat terhubung ke " + this.host)); else if (this.ws === ws && this.onClose) this.onClose(); };
+      ws.onerror = () => {};
+    });
   }
-  get name() { return this.device ? this.device.name : ""; }
   feed(t) { this.buf += t; let i; while ((i = this.buf.indexOf("\n")) >= 0) { const l = this.buf.slice(0, i).replace(/\r$/, ""); this.buf = this.buf.slice(i + 1); if (l && this.onLine) this.onLine(l); } }
-  send(line) {
-    const data = enc.encode(line + "\n");
-    this.q = this.q.then(async () => { for (let i = 0; i < data.length; i += 20) { const c = data.slice(i, i + 20); if (!this.rx) return; if (this.rx.writeValueWithoutResponse) await this.rx.writeValueWithoutResponse(c); else await this.rx.writeValue(c); } }).catch((e) => console.warn("BLE write", e));
-    return this.q;
-  }
-  close() { try { this.device && this.device.gatt.connected && this.device.gatt.disconnect(); } catch (e) {} }
+  send(line) { try { if (this.ws && this.ws.readyState === 1) this.ws.send(line); } catch (e) {} }
+  close() { const w = this.ws; this.ws = null; try { w && w.close(); } catch (e) {} }
 }
 class SerialLink {
   constructor() { this.onLine = null; this.onClose = null; this.buf = ""; }
@@ -642,81 +692,163 @@ class SerialLink {
   send(line) { return this.writer.write(enc.encode(line + "\n")).catch(() => {}); }
   async close() { try { await this.reader.cancel(); } catch (e) {} try { this.writer.releaseLock(); await this.port.close(); } catch (e) {} }
 }
-// demo: a simulated gimbal speaking the same protocol; the body leans and sways like walking
+// demo: a simulated gimbal speaking the same protocol. The stabiliser is the firmware's own (4.1, same
+// steps and settings); the plant is the one the firmware is tested against:
+//  - body: walks 18 s, stands 7 s; at the belt: left-right at the stride (0.9 Hz), nod at every step
+//    (1.8 Hz), a jolt at each heel strike, plus slow leaning
+//  - MG90S: reads a new pulse once per frame (100 Hz), ignores changes under 6 us, 25 ms lag, 500 deg/s
+//  - MPU6050: 4.8 ms filter delay, plus the small error walking leaves in the angle estimate
+const DEMO_TUNING = { kp: 0.6, gain: 10, ff: 0.8, db: 0.2, smooth: 0.02, maxrate: 400, acctau: 0.6, acctauw: 3, ffb: 1, pred: 1.1, sdb: 6, dbcomp: 0, dlpf: 3, pwmhz: 100 };
+const SRV_US_TRUE = 11.0, SRV_DB_US = 6, SRV_TAU = 0.025, SRV_VMAX = 500;
+const clampN = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const softDB = (e, db) => (e > db ? e - db : e < -db ? e + db : 0);
 class DemoLink {
   constructor() { this.onLine = null; this.onClose = null; }
   get name() { return "Gimbal D435 (demo)"; }
   async open() {
-    this.pin = "123456"; this.authed = false; this.nonce = this.rand();
-    this.cfg = { pitch: 35, roll: 0, kp: 0.6, gain: 15, ff: 0.8, db: 0.2, smooth: 0.03, maxrate: 400, acctau: 0.6, dlpf: 3, autobias: 1, bootgyro: 1, nod: 1, trimp: 0, trimr: 0, dirp: 1, dirr: 1, swap: 0, usdegp: 10.5, usdegr: 10.5, limp: 25, limr: 25, lvlp: 0, lvlr: 0, axes: "+X+Y+Z", tel: 10, led: 1, startmode: 0, name: "Gimbal D435", cal: 4, defpin: 1, mode: "center" };
-    this.p = 35; this.r = 0; this.sp = 0; this.sr = 0; this.simT = 0; this.wall = performance.now(); this.man = [0, 0]; this.stepOff = [0, 0]; this.stepRun = null;
-    this.ev = [[1200, "Menyala (fw 4.0). Restart karena: poweron. Restart tegangan turun total: 0"], [1250, "Belum dikalibrasi: servo ditahan di tengah. Jalankan Kalibrasi Otomatis."]];
+    this.pin = "123456"; this.authed = true; this.nonce = "";   // a simulation has nothing to protect: no PIN
+    this.cfg = { pitch: 35, roll: 0, ...DEMO_TUNING, autobias: 1, bootgyro: 1, nod: 1, trimp: 0, trimr: 0, dirp: 1, dirr: 1, swap: 0, usdegp: 10.5, usdegr: 10.5, limp: 25, limr: 25, lvlp: 0, lvlr: 0, axes: "+X+Y+Z", tel: 20, led: 1, startmode: 0, name: "Gimbal D435", cal: 4, defpin: 1, mode: "center", sdelay: 15, stau: 25 };
+    this.ax = [this.newAxis(), this.newAxis()];   // [pitch, roll]
+    this.ms = 0; this.n = 0; this.wall = performance.now(); this.man = [0, 0]; this.stepOff = [0, 0]; this.stepRun = null; this.b = this.body(0);
+    this.ev = [[1200, "Menyala (fw 4.1). Penyebab mulai ulang: poweron. Total mulai ulang karena tegangan turun: 0"], [1250, "Belum dikalibrasi: servo ditahan di tengah. Jalankan kalibrasi otomatis."]];
     this.timer = setInterval(() => this.tick(), 20);
   }
+  newAxis() { return { motor: 0, pulse: 0, pending: 0, f1: 0, f2: 0, f2Prev: 0, meas: 0, rate: 0, cmd: 0, slew: 0, out: 0, ff: 0, last: 0, sat: false, hist: new Float32Array(48), hi: 0, m: 0, mrate: 0, dbSg: 0, dbPk: 0 }; }
+  resetCtl() { for (const a of this.ax) { Object.assign(a, { cmd: 0, slew: 0, out: 0, ff: 0, last: 0, m: 0, mrate: 0, dbSg: 0, dbPk: 0 }); a.hist.fill(0); } }
   rand() { return [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join(""); }
   out(l) { setTimeout(() => this.onLine && this.onLine(l), 15); }
-  now() { return Math.round(this.simT * 1000 + 1300); }
+  now() { return this.ms + 1300; }
   cfgLine() { return "CFG " + JSON.stringify(this.cfg); }
-  // fixed 20 ms steps on a simulated clock: a busy page or a hidden tab delays the timer, so catch up
-  // step by step (at most 0.5 s) instead of letting the body jump while the controller assumes 20 ms
+  // fixed steps on a simulated clock (1 ms physics, 5 ms control like the firmware). A busy page or a
+  // hidden tab delays the timer: catch up step by step, at most 0.5 s.
   tick() {
-    const now = performance.now(); let n = Math.round((now - this.wall) / 20);
+    const now = performance.now(); let n = Math.round((now - this.wall) / 5);
     if (n <= 0) return;
-    this.wall += n * 20; n = Math.min(n, 25);
-    while (n--) this.step();
+    this.wall += n * 5; n = Math.min(n, 100);
+    while (n--) { for (let k = 0; k < 5; k++) this.physics(); this.control(0.005); }
   }
-  step() {
-    const dt = 0.02, c = this.cfg; this.simT += dt; const t = this.simT, run = this.stepRun;
-    if (run) { const ts = t - run.t0; this.stepOff[run.ax] = ts >= 0.5 && ts < 2 ? run.amp : 0; }
-    const bodyP = 6 * Math.sin(2 * Math.PI * 0.12 * t) + 1.6 * Math.sin(2 * Math.PI * 1.8 * t), bodyR = 7 * Math.sin(2 * Math.PI * 0.08 * t + 1) + 2.2 * Math.sin(2 * Math.PI * 1.8 * t + 0.5);
-    let tp = this.sp, tr = this.sr;
-    if (c.mode === "stab" && !this.cal) {
-      const eP = (c.pitch + this.stepOff[0]) - this.p, eR = (c.roll + this.stepOff[1]) - this.r;
-      const rP = (this.p - (this.pPrev ?? this.p)) / dt, rR = (this.r - (this.rPrev ?? this.r)) / dt;
-      this.iP = Math.max(-25, Math.min(25, (this.iP || 0) + (c.gain * eP - c.ff * rP) * dt)); this.iR = Math.max(-25, Math.min(25, (this.iR || 0) + (c.gain * eR - c.ff * rR) * dt));
-      tp = Math.max(-25, Math.min(25, this.iP + c.kp * eP)); tr = Math.max(-25, Math.min(25, this.iR + c.kp * eR));
-    } else if (c.mode === "manual") { tp = this.man[0]; tr = this.man[1]; } else { tp = 0; tr = 0; this.iP = 0; this.iR = 0; }
-    if (this.cal && this.cal.kind === "auto") { tp = this.cal.mv[0]; tr = this.cal.mv[1]; }
-    const k = dt / (0.05 + dt); this.sp += (tp - this.sp) * k; this.sr += (tr - this.sr) * k;
-    const noise = () => (Math.random() - 0.5) * 0.08;
-    this.pPrev = this.p; this.rPrev = this.r;
-    this.p = NOMINAL + bodyP + this.sp + noise(); this.r = bodyR + this.sr + noise();
-    this.n = (this.n || 0) + 1;
-    const sat = (Math.abs(tp) >= 25 ? 8 : 0) | (Math.abs(tr) >= 25 ? 16 : 0);
-    if (this.authed && c.tel && this.n % Math.max(1, Math.round(50 / c.tel)) === 0)
-      this.out(`T,${this.now()},${this.p.toFixed(2)},${this.r.toFixed(2)},${(c.pitch + this.stepOff[0]).toFixed(2)},${(c.roll + this.stepOff[1]).toFixed(2)},${this.sp.toFixed(2)},${this.sr.toFixed(2)},0,0,${["stab", "center", "manual", "off"].indexOf(c.mode)},${3 | sat}`);
-    if (run) {
-      this.cap.push([this.cap.length, Math.round((t - run.t0) * 1000), Math.round((c.pitch + this.stepOff[0]) * 100), Math.round(this.p * 100), Math.round((c.roll + this.stepOff[1]) * 100), Math.round(this.r * 100), Math.round(this.sp * 100), Math.round(this.sr * 100)]);
-      if (t - run.t0 >= 3) {
-        this.stepRun = null;
-        this.out(`CAPBEGIN ${run.ax ? "r" : "p"} ${run.amp.toFixed(1)} ${this.cap.length}`); this.cap.forEach((r, i) => this.out("C," + [i, ...r.slice(1)].join(","))); this.out("CAPEND");
+  body(t) {
+    const W = 2 * Math.PI, cyc = t % 25, walk = clampN(Math.min((cyc - 1) / 1.5, (19 - cyc) / 1.5), 0, 1);
+    const ph = (t * 1.8) % 1, heel = ph < 0.108 ? 0.5 - 0.5 * Math.cos(W * ph / 0.108) : 0;
+    return {
+      walk,
+      p: 5 * Math.sin(W * 0.06 * t) + walk * (2.0 * Math.sin(W * 1.8 * t + 1) + 0.6 * Math.sin(W * 3.6 * t + 0.3) + 0.8 * heel),
+      r: 4 * Math.sin(W * 0.045 * t + 1) + walk * (3.5 * Math.sin(W * 0.9 * t) + 0.8 * Math.sin(W * 1.8 * t + 0.7)),
+      // what walking leaves in the firmware's angle estimate (measured in the physics test: ~0.2 deg)
+      eP: walk * 0.18 * Math.sin(W * 1.8 * t + 2.0), eR: walk * 0.2 * Math.sin(W * 0.9 * t + 1.2),
+    };
+  }
+  physics() {
+    const dt = 0.001; this.ms++; const t = this.ms / 1000, b = (this.b = this.body(t));
+    const per = Math.max(3, Math.round(1000 / (this.cfg.pwmhz || 100))), latch = this.ms % per === 2 % per;   // the servo reads a new pulse once per frame
+    for (let i = 0; i < 2; i++) {
+      const a = this.ax[i];
+      if (latch) a.pulse = a.pending;
+      if (a.pulse !== null) {
+        const err = a.pulse - a.motor;
+        if (Math.abs(err) > SRV_DB_US / SRV_US_TRUE) a.motor += clampN(err / SRV_TAU, -SRV_VMAX, SRV_VMAX) * dt;
+      }
+      const truth = (i ? 0 : NOMINAL) + (i ? b.r : b.p) + a.motor, k = dt / (0.0024 + dt);
+      a.f1 += (truth - a.f1) * k; a.f2 += (a.f1 - a.f2) * k;    // MPU6050 filter
+    }
+  }
+  model(a, out, usdeg, dt) {   // the firmware's servo model
+    const c = this.cfg; a.hist[a.hi] = out; a.hi = (a.hi + 1) % 48;
+    const d = clampN(c.sdelay / 1000 / dt, 0, 46), d0 = Math.floor(d), fr = d - d0;
+    const x = a.hist[(a.hi + 47 - d0) % 48], y = a.hist[(a.hi + 46 - d0) % 48], del = x + (y - x) * fr;
+    const k = 1 - Math.exp(-dt / Math.max(c.stau / 1000, 0.002)), db = Math.max(c.sdb - c.dbcomp, 0) / Math.max(usdeg, 1);
+    const err = del - a.m, prev = a.m;
+    if (Math.abs(err) > db) a.m += (err - Math.sign(err) * db) * k;
+    a.mrate = (a.m - prev) / dt;
+  }
+  dbComp(a, us) {
+    const c = this.cfg;
+    if (c.dbcomp <= 0) { a.dbPk = us; a.dbSg = 0; return us; }
+    if (a.dbSg >= 0 && us < a.dbPk - 1) { a.dbSg = -1; a.dbPk = us; }
+    else if (a.dbSg <= 0 && us > a.dbPk + 1) { a.dbSg = 1; a.dbPk = us; }
+    else if ((a.dbSg > 0 && us > a.dbPk) || (a.dbSg < 0 && us < a.dbPk)) a.dbPk = us;
+    return us + a.dbSg * c.dbcomp;
+  }
+  control(dt) {
+    const c = this.cfg, b = this.b, run = this.stepRun;
+    this.n++;
+    if (run) { const ts = (this.ms - run.t0) / 1000; this.stepOff[run.ax] = ts >= 0.5 && ts < 2 ? run.amp : 0; }
+    const sp = [c.pitch + this.stepOff[0], c.roll + this.stepOff[1]], lim = [c.limp, c.limr], usd = [c.usdegp, c.usdegr], est = [b.eP, b.eR];
+    const lead = c.pred * (c.sdelay + c.stau + c.smooth * 1000) / 1000;
+    for (let i = 0; i < 2; i++) {
+      const a = this.ax[i], L = lim[i];
+      a.meas = a.f2 + est[i] + (Math.random() - 0.5) * 0.02;
+      a.rate = (a.f2 - a.f2Prev) / dt; a.f2Prev = a.f2;
+      if (this.cal && this.cal.kind === "auto") { a.out = a.slew = this.cal.mv[i]; a.pending = a.out * usd[i] / SRV_US_TRUE; continue; }
+      let tgt = 0; a.sat = false;
+      if (c.mode === "stab") {
+        const e = softDB(sp[i] - a.meas, c.db);
+        a.ff = c.ffb * (sp[i] - (a.meas - a.m) - lead * (a.rate - a.mrate));     // turn against the body right away
+        const ii = clampN(a.cmd + (c.gain * e - c.ff * a.rate) * dt, -L, L);
+        const t0 = a.ff + ii + c.kp * e;
+        if (!((t0 > L && e > 0) || (t0 < -L && e < 0))) a.cmd = ii;
+        const tot = a.ff + a.cmd + c.kp * e;
+        a.sat = tot >= L || tot <= -L; tgt = a.last = clampN(tot, -L, L);
+      } else if (c.mode === "manual") { tgt = clampN(this.man[i], -L, L); a.cmd = (1 - c.ffb) * tgt; }
+      else a.cmd = 0;
+      const st = c.maxrate * dt; a.slew += clampN(tgt - a.slew, -st, st);
+      a.out += (a.slew - a.out) * dt / (c.smooth + dt);
+      this.model(a, a.out, usd[i], dt);
+      const us = this.dbComp(a, a.out * usd[i]);
+      a.pending = c.mode === "off" ? null : us / SRV_US_TRUE;     // the servo turns by its own scale
+    }
+    const [P, R] = this.ax;
+    const flags = 3 | (P.sat ? 8 : 0) | (R.sat ? 16 : 0) | (this.cal ? 32 : 0) | (b.walk > 0.5 ? 128 : 0);
+    if (this.authed && c.tel && this.n % Math.max(1, Math.round(200 / c.tel)) === 0)
+      this.out(`T,${this.now()},${P.meas.toFixed(2)},${R.meas.toFixed(2)},${sp[0].toFixed(2)},${sp[1].toFixed(2)},${P.out.toFixed(2)},${R.out.toFixed(2)},${P.rate.toFixed(1)},${R.rate.toFixed(1)},${["stab", "center", "manual", "off"].indexOf(c.mode)},${flags}`);
+    if (run && this.n % 2 === 0) {     // 100 Hz like the firmware
+      this.cap.push([this.cap.length, this.ms - run.t0, Math.round(sp[0] * 100), Math.round(P.meas * 100), Math.round(sp[1] * 100), Math.round(R.meas * 100), Math.round(P.out * 100), Math.round(R.out * 100)]);
+      if (this.cap.length >= 300) {
+        this.stepRun = null; this.stepOff = [0, 0];
+        this.out(`CAPBEGIN ${run.ax ? "r" : "p"} ${run.amp.toFixed(1)} ${this.cap.length}`); this.cap.forEach((r) => this.out("C," + r.join(","))); this.out("CAPEND");
       }
     }
   }
   async send(line) {
     const [cmd, a1, a2, a3] = line.trim().split(/\s+/); const C = cmd.toUpperCase(), c = this.cfg;
-    if (C === "HELLO") return this.out(`HELLO {"fw":"4.0","name":"${c.name}","auth":${this.authed ? 0 : 1},"nonce":"${this.nonce}","lock":0}`);
-    if (C === "AUTH") { const want = await sha256hex(this.nonce + ":" + this.pin); if (a1 === want) { this.authed = true; this.out("AUTH OK"); this.ev.push([this.now(), "Bluetooth tersambung, sandi benar"]); this.out("EV " + this.now() + " Bluetooth tersambung, sandi benar"); } else { this.nonce = this.rand(); this.out("AUTH FAIL 4 " + this.nonce); } return; }
+    if (C === "HELLO") return this.out(`HELLO {"fw":"4.1","name":"${c.name}","auth":0,"nonce":"","lock":0,"clients":1}`);
+    if (C === "AUTH") return this.out("AUTH OK");
     if (C === "PING") return this.out("PONG " + this.now());
     if (!this.authed) return this.out("ERR AUTH");
+    const [P, R] = this.ax;
     switch (C) {
       case "GET": return this.out(this.cfgLine());
-      case "STATUS": return this.out(`ST {"fw":"4.0","up":${Math.round(this.now() / 1000)},"hz":200,"rst":"poweron","boots":7,"brown":0,"imu":1,"who":"0x68","addr":"0x68","i2cerr":0,"temp":38.4,"bias":[1.21,-0.79,0.48],"heap":181240,"ble":2,"mtu":247,"mode":"${c.mode}","cal":"${this.cal ? this.cal.kind : "idle"}","still":1,"accrej":3,"usp":${(1500 + this.sp * 10.5).toFixed(0)},"usr":${(1500 + this.sr * 10.5).toFixed(0)},"swap":${c.swap}}`);
+      case "STATUS": return this.out(`ST {"fw":"4.1","up":${Math.round(this.now() / 1000)},"hz":200,"rst":"poweron","boots":7,"brown":0,"imu":1,"who":"0x68","addr":"0x68","i2cerr":0,"temp":38.4,"bias":[1.21,-0.79,0.48],"heap":181240,"clients":1,"rssi":-54,"mode":"${c.mode}","cal":"${this.cal ? this.cal.kind : "idle"}","still":${this.b.walk > 0 ? 0 : 1},"accrej":3,"usp":${(1500 + P.out * c.usdegp).toFixed(0)},"usr":${(1500 + R.out * c.usdegr).toFixed(0)},"swap":${c.swap},"walk":${this.b.walk.toFixed(2)},"ffp":${P.ff.toFixed(2)},"ffr":${R.ff.toFixed(2)},"ip":${P.cmd.toFixed(2)},"ir":${R.cmd.toFixed(2)}}`);
       case "EVLOG": this.ev.slice(-16).forEach(([t, s]) => this.out(`EV ${t} ${s}`)); return this.out("EVEND");
       case "SET": { const k = (a1 || "").toLowerCase(); if (k === "axes") c.axes = a2; else if (k in c) c[k] = Number(a2); return this.out(this.cfgLine()); }
-      case "MODE": c.mode = (a1 || "").toLowerCase(); if (c.mode === "manual") this.man = [this.sp, this.sr]; return this.out(this.cfgLine());
+      case "MODE": {
+        const m = (a1 || "").toLowerCase();
+        if (m === "stab" && c.mode !== "stab") for (const a of this.ax) a.cmd = (1 - c.ffb) * a.out;   // continue from where the servos are
+        if (m === "manual") this.man = [P.out, R.out];
+        c.mode = m; return this.out(this.cfgLine());
+      }
       case "MAN": this.man = [Number(a1), Number(a2)]; return this.out(`OK MAN ${a1} ${a2}`);
+      case "WIFI": {
+        const w = this.wifi || (this.wifi = { on: 1, sta: 1, ssid: "Ponsel Demo", ip: "172.20.10.3", rssi: -54, ap: 0, apssid: "Gimbal-D435-A1B2", apip: "", apn: 0, host: "gimbal-d435", clients: 1, saved: 1 });
+        const sub = (a1 || "").toUpperCase();
+        if (sub === "SCAN") { this.out("OK WIFI SCAN"); setTimeout(() => this.out('WIFI LIST [{"s":"Ponsel Demo","r":-48,"k":1},{"s":"Kos Lantai 2","r":-67,"k":1},{"s":"Kafe Gratis","r":-80,"k":0}]'), 1800); return; }
+        if (sub === "JOIN") { const dehex = (h) => new TextDecoder().decode(new Uint8Array((h || "").match(/../g)?.map((x) => parseInt(x, 16)) || [])); w.ssid = dehex(a2); w.sta = 0; this.out("OK WIFI JOIN"); this.out(`EV ${this.now()} Menghubungkan ke hotspot ${w.ssid}...`); setTimeout(() => { w.sta = 1; this.out(`EV ${this.now()} Terhubung ke ${w.ssid}. Buka http://gimbal-d435.local atau http://172.20.10.3`); this.out("WIFI " + JSON.stringify(w)); }, 1500); return; }
+        if (sub === "FORGET") { Object.assign(w, { ssid: "", sta: 0, saved: 0, ap: 1, apip: "192.168.4.1" }); this.out("OK WIFI FORGET"); return this.out("WIFI " + JSON.stringify(w)); }
+        if (sub === "AP") return this.out("OK WIFI AP");
+        if (sub === "APOFF") { w.ap = 0; return this.out("OK WIFI APOFF"); }
+        return this.out("WIFI " + JSON.stringify(w));
+      }
       case "CAL": return this.demoCal((a1 || "").toLowerCase(), a2, a3);
       case "STEP": {
         const ax = (a1 || "p")[0] === "r" ? 1 : 0, amp = Number(a2 || 5);
         if (this.stepRun) return this.out("ERR uji langkah masih berjalan");
-        this.out(`STEP START ${ax ? "r" : "p"} ${amp.toFixed(1)}`); this.cap = []; this.stepOff = [0, 0]; this.stepRun = { ax, amp, t0: this.simT };
+        this.out(`STEP START ${ax ? "r" : "p"} ${amp.toFixed(1)}`); this.cap = []; this.stepOff = [0, 0]; this.stepRun = { ax, amp, t0: this.ms };
         return;
       }
       case "PIN": this.pin = a1; c.defpin = a1 === "123456" ? 1 : 0; this.out("OK PIN"); return this.out(this.cfgLine());
       case "NAME": c.name = (a1 || "").replace(/_/g, " "); return this.out(`OK NAME ${c.name} (berlaku setelah restart)`);
       case "SAVE": return this.out("OK SAVE");
-      case "DEFAULTS": Object.assign(c, { kp: 0.6, gain: 15, ff: 0.8, db: 0.2, smooth: 0.03, maxrate: 400, acctau: 0.6, pitch: 35, roll: 0 }); return this.out(this.cfgLine());
+      case "DEFAULTS": Object.assign(c, DEMO_TUNING, { pitch: 35, roll: 0 }); return this.out(this.cfgLine());
       case "REBOOT": this.out("OK REBOOT"); setTimeout(() => this.close(), 300); return;
       case "HELP": return this.out("HELP (demo) GET STATUS SET MODE MAN CAL STEP PIN NAME SAVE DEFAULTS REBOOT");
       default: return this.out("ERR perintah tidak dikenal: " + C + " (kirim HELP)");
@@ -730,9 +862,14 @@ class DemoLink {
     if (kind === "level") { this.cal = { kind }; setTimeout(() => { this.cal = null; if (a2 !== "x") c.lvlp = +(Math.random() * 2 - 1).toFixed(2); if (a3 !== "x") c.lvlr = +(Math.random() * 2 - 1).toFixed(2); c.cal |= 2; this.out(`CAL DONE level {"lvlp":${c.lvlp},"lvlr":${c.lvlr}}`); this.out(this.cfgLine()); }, 1500); return; }
     if (kind === "auto") {
       this.cal = { kind, mv: [0, 0] };
-      [[3200, () => this.out("CAL STEP gyro ok")], [4000, () => { this.out("CAL STEP servo3 move"); this.cal.mv = [14, 0]; }], [5900, () => { this.cal.mv = [0, 0]; }], [6800, () => { this.out("CAL STEP servo4 move"); this.cal.mv = [0, 14]; }], [8700, () => { this.cal.mv = [0, 0]; }],
-       [9600, () => { this.cal = null; Object.assign(c, { axes: "-X+Y-Z", swap: 1, dirp: -1, dirr: 1, usdegp: 11.08, usdegr: 10.95, lvlp: 0, lvlr: 0, mode: "stab" }); c.cal = (c.cal | 5) & ~2;
-         this.out('CAL DONE auto {"axes":"-X+Y-Z","swap":1,"dirp":-1,"dirr":1,"usdegp":11.08,"usdegr":10.95,"gyrop":13.4,"gyror":13.6,"accp":-13.5,"accr":13.7,"align":0.99,"bias":[1.20,-0.80,0.50],"levelreset":1}'); this.out(this.cfgLine()); }]].forEach(([t, f]) => setTimeout(f, t));
+      const plan = [[3200, () => this.out("CAL STEP gyro ok")], [4000, () => { this.out("CAL STEP servo3 move"); this.cal.mv = [14, 0]; }], [5900, () => { this.cal.mv = [0, 0]; }], [6800, () => { this.out("CAL STEP servo4 move"); this.cal.mv = [0, 14]; }], [8700, () => { this.cal.mv = [0, 0]; }], [9600, () => this.out("CAL STEP timing")]];
+      for (let k = 0; k < 8; k++) plan.push([9600 + k * 305, () => { if (this.cal) this.cal.mv = k < 4 ? [k % 2 ? 0 : 5.5, 0] : [0, k % 2 ? 0 : 5.5]; }]);
+      plan.push([9600 + 8 * 305, () => {
+        this.cal = null; this.resetCtl();
+        Object.assign(c, { axes: "-X+Y-Z", swap: 1, dirp: -1, dirr: 1, usdegp: 11.08, usdegr: 10.95, lvlp: 0, lvlr: 0, sdelay: 11.6, stau: 20.4, mode: "stab" }); c.cal = (c.cal | 5) & ~2;
+        this.out('CAL DONE auto {"axes":"-X+Y-Z","swap":1,"dirp":-1,"dirr":1,"usdegp":11.08,"usdegr":10.95,"gyrop":13.4,"gyror":13.6,"accp":-13.5,"accr":13.7,"align":0.99,"bias":[1.20,-0.80,0.50],"levelreset":1,"sdelay":11.6,"stau":20.4,"tsteps":8}'); this.out(this.cfgLine());
+      }]);
+      plan.forEach(([t, f]) => setTimeout(f, t));
     }
   }
   close() { clearInterval(this.timer); if (this.onClose) this.onClose(); }
@@ -755,24 +892,18 @@ function download(name, text) { const a = document.createElement("a"); a.href = 
 
 // ======================================================================== connect / auth
 function supportNote() {
-  const b = !!navigator.bluetooth, s = !!navigator.serial, secure = window.isSecureContext;
-  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-  let t;
-  if (ios && !b) t = "Safari di iPad dan iPhone belum bisa Bluetooth web. Buka alamat ini di aplikasi Bluefy (gratis di App Store), lalu tekan Sambung Bluetooth.";
-  else if (!secure) t = "Buka halaman ini lewat alamat https (GitHub Pages) supaya Bluetooth dan USB bisa dipakai.";
-  else if (!b && !s) t = "Browser ini belum mendukung Bluetooth web. Pakai Chrome atau Edge di Android, Windows, macOS, atau Linux. Di iPhone pakai browser Bluefy.";
-  else if (!b) t = "Bluetooth web tidak tersedia di browser ini. Kabel USB tetap bisa dipakai.";
-  else if (!s) t = "Di HP sambungkan lewat Bluetooth. Sambung USB hanya untuk Chrome atau Edge di komputer.";
-  else t = "";
-  $("#supportNote").textContent = t; $("#supportNote").hidden = !t;
-  $("#btnBle").disabled = !b || !secure; $("#btnUsb").disabled = !s || !secure;
+  const usb = !!navigator.serial && window.isSecureContext;
+  $("#btnUsb").hidden = !usb || ON_DEVICE;
+  $("#btnWifi").hidden = !ON_DEVICE; $("#howWifi").hidden = ON_DEVICE;
+  if (ON_DEVICE) $("#leadTxt").textContent = "Aplikasi ini dimuat langsung dari gimbal. Masukkan sandi untuk melanjutkan.";
 }
+const KIND_TXT = { wifi: "lewat WiFi", usb: "lewat USB", demo: "demo" };
 async function connect(kind) {
   if (S.link) await disconnect(true);
-  const link = kind === "ble" ? new BleLink() : kind === "usb" ? new SerialLink() : new DemoLink();
+  const link = kind === "wifi" ? new WsLink(WS_HOST) : kind === "usb" ? new SerialLink() : new DemoLink();
   document.body.classList.toggle("demo", kind === "demo");
-  setPill("wait", kind === "ble" ? "Mencari gimbal…" : "Menyambung…");
-  try { await link.open(); } catch (e) { setPill("idle", "Belum tersambung"); if (e && e.name !== "NotFoundError") toast("Gagal menyambung: " + (e.message || e), "bad"); return; }
+  setPill("wait", "Menghubungkan…");
+  try { await link.open(); } catch (e) { setPill("idle", "Belum terhubung"); if (e && e.name !== "NotFoundError") toast("Gagal terhubung: " + (e.message || e), "bad"); return; }
   S.link = link; S.kind = kind; S.authed = false; S.manualClose = false; S.lastRx = Date.now();
   link.onLine = onLine; link.onClose = onLinkClosed;
   setPill("wait", "Menghubungi " + (link.name || "gimbal") + "…");
@@ -780,41 +911,44 @@ async function connect(kind) {
 }
 async function disconnect(silent) {
   S.manualClose = true; const l = S.link; S.link = null; S.authed = false; if (l) await l.close();
-  showApp(false); setPill("idle", "Belum tersambung"); $("#btnDisconnect").hidden = true; document.body.classList.remove("demo");
+  showApp(false); setPill("idle", "Belum terhubung"); $("#btnDisconnect").hidden = true; document.body.classList.remove("demo");
   if (!silent) toast("Sambungan diputus");
 }
 function onLinkClosed() {
   if (S.manualClose || !S.link) return;
   const wasAuthed = S.authed; S.authed = false; setPill("bad", "Terputus");
-  if (wasAuthed) { chime(false); toast("Gimbal terputus. Mencoba menyambung lagi…", "bad"); }
-  if (S.kind === "ble") reconnect(); else { S.link = null; showApp(false); }
+  if (wasAuthed) { chime(false); toast("Gimbal terputus. Mencoba menghubungkan kembali…", "bad"); }
+  if (S.kind === "wifi") reconnect(); else { S.link = null; showApp(false); }
 }
 async function reconnect() {
   if (S.reconnecting) return; S.reconnecting = true; const link = S.link;
-  for (let i = 0; i < 4 && S.link === link && !S.manualClose; i++) {
-    setPill("wait", "Menyambung ulang (" + (i + 1) + ")…");
-    try { await link.connect(); S.lastRx = Date.now(); link.send("HELLO"); S.reconnecting = false; return; } catch (e) { await new Promise((r) => setTimeout(r, 1500 + i * 1500)); }
+  for (let i = 0; i < 8 && S.link === link && !S.manualClose; i++) {
+    setPill("wait", "Menghubungkan ulang…");
+    try { await link.connect(); S.lastRx = Date.now(); link.send("HELLO"); S.reconnecting = false; return; } catch (e) { await new Promise((r) => setTimeout(r, Math.min(1000 + i * 1000, 4000))); }
   }
   S.reconnecting = false;
-  if (S.link === link) { S.link = null; showApp(false); setPill("bad", "Terputus"); toast("Tidak bisa menyambung ulang. Tekan Sambung Bluetooth lagi.", "bad"); }
+  if (S.link === link) { S.link = null; showApp(false); setPill("bad", "Terputus"); toast("Gimbal tidak terjangkau. Periksa hotspot, lalu tekan Hubungkan.", "bad"); }
 }
 async function doAuth(pin) { const h = await sha256hex(S.nonce + ":" + pin); S.pendingPin = pin; send("AUTH " + h); }
 function askPin(msg) {
   const d = $("#pinDlg"); $("#pinDlgErr").textContent = msg || ""; $("#pinIn").value = "";
-  $("#pinDlgName").textContent = (S.hello && S.hello.name ? S.hello.name + ". " : "") + "Sandi bawaan 123456. Ganti setelah tersambung.";
+  $("#pinDlgName").textContent = (S.hello && S.hello.name ? S.hello.name + ". " : "") + "Sandi bawaan: 123456. Gantilah setelah terhubung.";
   if (!d.open) d.showModal(); setTimeout(() => $("#pinIn").focus(), 50); setPill("wait", "Masukkan sandi");
 }
 $("#pinForm").addEventListener("submit", (e) => { const v = e.submitter ? e.submitter.value : "ok"; if (v === "cancel") { disconnect(true); return; } const pin = $("#pinIn").value.trim(); if (!pin) { e.preventDefault(); return; } doAuth(pin); });
+const PIN_KEY = "gimbalPin:" + location.host;
+function pillOk() { const n = S.clients || 1; setPill("ok", "Terhubung", KIND_TXT[S.kind] + (n > 1 ? ", " + n + " perangkat" : "")); }
 function onAuthed() {
-  S.authed = true;
-  if (S.pendingPin && $("#pinRemember").checked && S.kind === "ble") store.set("gimbalPin", S.pendingPin);
+  const again = S.authed; S.authed = true;
+  if (S.pendingPin && $("#pinRemember").checked && S.kind === "wifi") store.set(PIN_KEY, S.pendingPin);
   S.pendingPin = null;
   const name = (S.hello && S.hello.name) || "gimbal";
   $("#devName").textContent = name;
-  setPill("ok", "Tersambung", S.kind === "usb" ? "lewat USB" : "lewat Bluetooth");
-  $("#btnDisconnect").hidden = false; showApp(true); chime(true);
-  toast(S.kind === "usb" ? "Tersambung lewat USB" : "Tersambung ke " + name + ". Sandi benar.", "ok");
-  send("GET"); send("STATUS"); send("EVLOG");
+  S.clients = (S.hello && S.hello.clients) || 1; pillOk();
+  $("#btnDisconnect").hidden = false; showApp(true);
+  if (!again) { chime(true); toast(S.kind === "demo" ? "Demo berjalan. Semua angka dari simulasi." : S.kind === "usb" ? "Terhubung lewat USB" : "Terhubung ke " + name, "ok"); }
+  if (S.clients > 1 && S.kind === "wifi") toast("Ada " + (S.clients - 1) + " perangkat lain yang juga terhubung. Perubahan dari mana pun langsung terlihat di semua.", "warn");
+  send("GET"); send("STATUS"); send("EVLOG"); if (S.kind !== "usb") send("WIFI");
 }
 function showApp(on) { $("#app").hidden = !on; $("#connect").hidden = on; document.body.classList.toggle("offline", !on); if (!on) { $("#rPitch").textContent = "--"; $("#rRoll").textContent = "--"; $("#devName").textContent = "Gimbal D435"; } }
 
@@ -832,17 +966,18 @@ function onLine(line) {
       if (S.authed && S.hello.auth === 0) return;
       if (!S.hello.auth) return onAuthed();
       if (S.hello.lock > 0) { setPill("bad", "Terkunci"); toast("Terlalu banyak sandi salah. Coba lagi dalam " + S.hello.lock + " detik.", "bad"); return; }
-      const saved = store.get("gimbalPin"); if (saved) doAuth(saved); else askPin(); return;
+      const saved = store.get(PIN_KEY); if (saved) doAuth(saved); else askPin(); return;
     }
     case "AUTH": {
       const [r, n, nonce] = rest.split(" ");
       if (r === "OK") { if ($("#pinDlg").open) $("#pinDlg").close(); return onAuthed(); }
-      if (r === "FAIL") { S.nonce = nonce || S.nonce; store.del("gimbalPin"); askPin("Sandi salah. Sisa " + n + " percobaan."); return; }
-      if (r === "LOCKED") { if ($("#pinDlg").open) $("#pinDlg").close(); setPill("bad", "Terkunci " + n + " detik"); toast("5 kali sandi salah. Bluetooth dikunci " + n + " detik.", "bad"); return; }
+      if (r === "FAIL") { S.nonce = nonce || S.nonce; store.del(PIN_KEY); askPin("Sandi salah. Sisa " + n + " percobaan."); return; }
+      if (r === "LOCKED") { if ($("#pinDlg").open) $("#pinDlg").close(); setPill("bad", "Terkunci " + n + " detik"); toast("5 kali sandi salah. Coba lagi dalam " + n + " detik.", "bad"); return; }
       return;
     }
     case "CFG": { const c = parseJson(rest); if (c) applyCfg(c); return; }
-    case "ST": { const s = parseJson(rest); if (s) { S.st = s; renderDiag(); } return; }
+    case "ST": { const s = parseJson(rest); if (s) { S.st = s; if (s.clients) { S.clients = s.clients; if ($("#pill").dataset.s === "ok") pillOk(); } renderDiag(); } return; }
+    case "WIFI": return onWifi(rest);
     case "EV": { const m = rest.match(/^(\d+)\s(.*)$/); if (m) addEvent(+m[1], m[2], true); return; }
     case "EVEND": return;
     case "CAL": return onCal(rest);
@@ -852,19 +987,27 @@ function onLine(line) {
     case "ERR": toast(rest === "AUTH" ? "Perlu sandi dulu" : rest, "bad"); return;
     case "WARN": toast(rest, "warn"); return;
     case "OK":
-      if (rest.startsWith("PIN")) { toast("Sandi diganti", "ok"); $("#pinNew").value = $("#pinNew2").value = ""; if (S.pendingNewPin && store.get("gimbalPin")) store.set("gimbalPin", S.pendingNewPin); }
-      else if (rest.startsWith("NAME")) toast("Nama disimpan. Berlaku setelah restart.", "ok");
-      else if (rest.startsWith("REBOOT")) toast("Gimbal restart…", "warn");
+      if (rest.startsWith("PIN")) { toast("Sandi diganti", "ok"); $("#pinNew").value = $("#pinNew2").value = ""; if (S.pendingNewPin && store.get(PIN_KEY)) store.set(PIN_KEY, S.pendingNewPin); }
+      else if (rest.startsWith("NAME")) { const m = rest.match(/http:\/\/[^\s)]+/); toast("Nama disimpan. Setelah gimbal dinyalakan ulang, alamatnya menjadi " + (m ? m[0] : "alamat baru") + ".", "ok"); }
+      else if (rest.startsWith("WIFI JOIN")) { $("#wifiErr").textContent = ""; $("#wifiNow").textContent = "Menghubungkan ke " + $("#wifiSsid").value + "…"; }
+      else if (rest.startsWith("WIFI FORGET")) toast("Hotspot dilupakan. WiFi gimbal sendiri menyala.", "warn");
+      else if (rest.startsWith("WIFI AP")) { toast("Sandi WiFi gimbal diganti", "ok"); $("#apPassIn").value = ""; }
+      else if (rest.startsWith("REBOOT")) toast("Gimbal sedang dinyalakan ulang…", "warn");
       return;
   }
 }
+let pingN = 0;
 setInterval(() => {
-  if (!S.link || !S.authed) return;
+  if (!S.link) return;
+  if (S.kind === "wifi" && ++pingN % 5 === 0) S.link.send("PING");   // the gimbal drops a silent connection after 20 s
+  if (!S.authed) return;
   const age = Date.now() - S.lastRx;
   if (!S.cfg.tel && age > 1500) S.link.send("PING");
   if (age > 3500) setPill("warn", "Sinyal hilang", "tidak ada data");
-  else if ($("#pill").dataset.s === "warn") setPill("ok", "Tersambung", S.kind === "usb" ? "lewat USB" : "lewat Bluetooth");
+  else if ($("#pill").dataset.s === "warn") pillOk();
 }, 1000);
+// phone screen locked or the browser was in the background: the connection is gone, open it again
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && S.kind === "wifi" && S.link && Date.now() - S.lastRx > 4000) reconnect(); });
 
 // ======================================================================== live view: twin, bubble, explanation
 function buildBubble() {
@@ -899,7 +1042,7 @@ function drawAll() {
   const d = S.lastT; if (!d) return;
   $("#rPitch").textContent = fmt(d.p) + "°"; $("#rRoll").textContent = fmt(d.r) + "°";
   const eP = d.p - d.sp, eR = d.r - d.sr, stab = d.mode === 0;
-  const diff = (el, e) => { const ok = Math.abs(e) < 0.3; el.textContent = stab ? (ok ? "pas" : `${signed(e)}°`) : ""; el.className = "d num " + (stab ? (ok ? "good" : Math.abs(e) > 2 ? "off" : "") : ""); };
+  const diff = (el, e) => { const ok = Math.abs(e) < 0.3; el.textContent = stab ? (ok ? "tepat" : `${signed(e)}°`) : ""; el.className = "d num " + (stab ? (ok ? "good" : Math.abs(e) > 2 ? "off" : "") : ""); };
   diff($("#rPitchDiff"), eP); diff($("#rRollDiff"), eR);
   const now = performance.now();
   if (now - lastExplain > 300) { lastExplain = now; explain(d); }
@@ -908,13 +1051,14 @@ function drawAll() {
 function explain(d) {
   const tP = $("#tagP b"), tR = $("#tagR b");
   if (d.mode === 1) { tP.textContent = tR.textContent = "tengah"; }
-  else if (d.mode === 3) { tP.textContent = tR.textContent = "mati"; }
+  else if (d.mode === 3) { tP.textContent = tR.textContent = "nonaktif"; }
   else { tP.textContent = signed(d.op) + "°"; tR.textContent = signed(d.or) + "°"; }
   let w = "";
-  if (!(d.flags & 1)) w = "MPU6050 tidak terbaca. Cek empat kabel sensor.";
+  if (!(d.flags & 1)) w = "MPU6050 tidak terbaca. Periksa keempat kabel sensor.";
   else if (d.mode === 0 && (d.flags & 24)) w = "Servo di batas ±" + fmt(+S.cfg.limp || 25, 0) + "°. Badan terlalu miring.";
   else if (d.mode === 1) w = "Mode Tengah: servo diam.";
   $("#chWarn").textContent = w; $("#chWarn").hidden = !w;
+  $("#chWalk").hidden = !!w || !(d.flags & 128);
 }
 function fitCanvas(cv) {
   const r = cv.getBoundingClientRect(), dpr = Math.min(3, window.devicePixelRatio || 1);
@@ -942,8 +1086,8 @@ function drawLive() {
 
 // ======================================================================== settings binding
 function showVal(key, v) {
-  const units = { db: "°", smooth: " dtk", maxrate: "°/dtk", acctau: " dtk", tel: "×/dtk" };
-  const dd = { kp: 2, gain: 1, ff: 2, db: 2, smooth: 3, maxrate: 0, acctau: 2, tel: 0 }[key] ?? 1;
+  const units = { db: "°", smooth: " s", maxrate: "°/s", acctau: " s", acctauw: " s", tel: "×/s", sdb: " µs", dbcomp: " µs" };
+  const dd = { kp: 2, gain: 1, ff: 2, db: 2, smooth: 3, maxrate: 0, acctau: 2, tel: 0, ffb: 2, pred: 2, acctauw: 1 }[key] ?? 1;
   $$(`[data-show="${key}"]`).forEach((e) => (e.textContent = fmt(v, dd) + (units[key] || "")));
 }
 function applyCfg(c) {
@@ -955,14 +1099,14 @@ function applyCfg(c) {
   if (!S.dragging.has($("#rollSlider"))) $("#rollSlider").value = c.roll;
   $("#rollSetTxt").textContent = fmt(c.roll) + "°";
   $$("#modeSeg button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.m === c.mode));
-  const help = { stab: "Stabil: kamera dijaga di sudut target.", center: "Tengah: kedua servo diam di tengah. Dipakai saat memasang horn.", manual: "Manual: servo digerakkan dari slider di bawah.", off: "Mati: servo tidak diberi sinyal dan bisa diputar tangan." };
+  const help = { stab: "Stabil: kamera dijaga di sudut target.", center: "Tengah: kedua servo diam di tengah. Dipakai saat memasang horn.", manual: "Manual: servo digerakkan dari slider di bawah.", off: "Nonaktif: servo tidak diberi sinyal dan bisa diputar tangan." };
   $("#modeHelp").textContent = help[c.mode] || "";
   $("#manualBlk").hidden = c.mode !== "manual";
   $("#lvlrTxt").textContent = fmt(c.lvlr, 2) + "°"; $("#lvlpTxt").textContent = fmt(c.lvlp, 2) + "°";
   $("#trimpTxt").textContent = c.trimp + " µs"; $("#trimrTxt").textContent = c.trimr + " µs";
   $("#calAutoLi").classList.toggle("done", !!(c.cal & 1)); $("#calLevelLi").classList.toggle("done", !!(c.cal & 2)); $("#calGyroLi").classList.toggle("done", !!(c.cal & 4));
   if (document.activeElement !== $("#nameIn")) $("#nameIn").value = c.name || "";
-  $("#pinWarn").textContent = c.defpin ? "Masih memakai sandi bawaan 123456. Ganti supaya orang lain tidak bisa mengendalikan gimbalmu." : "Sandi dipakai setiap kali menyambung lewat Bluetooth.";
+  $("#pinWarn").textContent = c.defpin ? "Sandi masih bawaan (123456). Gantilah agar orang lain di hotspot yang sama tidak dapat mengendalikan gimbal Anda." : "Diminta setiap kali ponsel atau iPad terhubung.";
   $("#pinWarn").style.color = c.defpin ? "var(--warn)" : "";
   if (!(c.cal & 1) && !S.calHintShown) { S.calHintShown = true; toast("Gimbal belum dikalibrasi. Buka menu Kalibrasi.", "warn"); }
 }
@@ -994,13 +1138,13 @@ function onCal(rest) {
   const [what, kind, ...more] = rest.split(" "), tail = more.join(" ");
   const box = { auto: "#calAutoOut", gyro: "#calGyroOut", level: "#calLevelOut" };
   const show = (k, html, cls) => { const b = $(box[k] || "#calAutoOut"); b.hidden = false; b.className = "progress " + (cls || ""); b.innerHTML = html; };
-  if (what === "START") { show(kind, kind === "auto" ? "Langkah 1 dari 3: mengukur gyro dan arah gravitasi. Jangan disentuh…" : kind === "gyro" ? "Mengukur gyro selama 2 detik…" : "Mengukur sudut…"); return; }
-  if (what === "STEP") { show("auto", kind === "gyro" ? "Langkah 2 dari 3: menggerakkan servo di GPIO3…" : kind === "servo4" ? "Langkah 3 dari 3: menggerakkan servo di GPIO4…" : "Langkah 2 dari 3: menggerakkan servo di GPIO3…"); return; }
+  if (what === "START") { show(kind, kind === "auto" ? "Langkah 1 dari 4: mengukur gyro dan arah gravitasi. Jangan disentuh…" : kind === "gyro" ? "Mengukur gyro selama 2 detik…" : "Mengukur sudut…"); return; }
+  if (what === "STEP") { show("auto", kind === "timing" ? "Langkah 4 dari 4: mengukur kecepatan servo dengan gerakan kecil yang cepat…" : kind === "servo4" ? "Langkah 3 dari 4: menggerakkan servo di GPIO4…" : "Langkah 2 dari 4: menggerakkan servo di GPIO3…"); return; }
   if (what === "DONE") {
     const j = parseJson(tail) || {};
-    if (kind === "auto") { show("auto", `Selesai. Sumbu MPU6050 <b>${j.axes}</b>, kabel servo ${j.swap ? "<b>tertukar, sudah dibetulkan otomatis</b>" : "benar"}, skala servo ${fmt(j.usdegp, 2)} dan ${fmt(j.usdegr, 2)} µs per derajat.${j.levelreset ? " Lanjutkan ke kalibrasi datar." : ""}`, "ok"); chime(true); toast("Kalibrasi otomatis selesai", "ok"); }
-    else if (kind === "gyro") show("gyro", `Selesai. Noise ${fmt(j.noise, 3)}°/dtk.`, "ok");
-    else if (kind === "level") show("level", `Selesai. Koreksi nunduk ${fmt(j.lvlp, 2)}°, kiri-kanan ${fmt(j.lvlr, 2)}°.`, "ok");
+    if (kind === "auto") { show("auto", `Selesai. Sumbu MPU6050 <b>${j.axes}</b>, kabel servo ${j.swap ? "<b>tertukar, sudah dibetulkan otomatis</b>" : "benar"}, skala servo ${fmt(j.usdegp, 2)} dan ${fmt(j.usdegr, 2)} µs per derajat${j.stau ? `, servo bereaksi setelah ${fmt(j.sdelay, 0)} ms dan sampai dalam ${fmt(j.stau, 0)} ms` : ""}.${j.levelreset ? " Lanjutkan ke kalibrasi datar." : ""}`, "ok"); chime(true); toast("Kalibrasi otomatis selesai", "ok"); }
+    else if (kind === "gyro") show("gyro", `Selesai. Derau ${fmt(j.noise, 3)}°/s.`, "ok");
+    else if (kind === "level") show("level", `Selesai. Koreksi atas-bawah ${fmt(j.lvlp, 2)}°, kanan-kiri ${fmt(j.lvlr, 2)}°.`, "ok");
     send("GET"); return;
   }
   if (what === "FAIL") { show(kind, "Gagal: " + tail, "bad"); toast("Kalibrasi gagal", "bad"); }
@@ -1009,7 +1153,7 @@ $("#calAuto").onclick = () => send("CAL auto");
 $("#calGyro").onclick = () => send("CAL gyro");
 $("#calLevel").onclick = () => {
   const useP = $("#lvlUseP").checked, useR = $("#lvlUseR").checked, p = $("#lvlPIn").value.replace(",", "."), r = $("#lvlRIn").value.replace(",", ".");
-  if (useP && p === "") { toast("Isi sudut nunduk yang terbaca, atau hilangkan centang Pakai nunduk", "warn"); return; }
+  if (useP && p === "") { toast("Isi sudut atas-bawah yang terbaca, atau hilangkan centang Gunakan sudut atas-bawah", "warn"); return; }
   send(`CAL level ${useP ? p : "x"} ${useR ? (r || 0) : "x"}`);
 };
 
@@ -1038,24 +1182,24 @@ function drawStep() {
 }
 $("#stepP").onclick = () => send("STEP p 5");
 $("#stepR").onclick = () => send("STEP r 5");
-$("#stepCsv").onclick = () => { const c = S.lastCap; if (!c) return; download(`uji_respons_${c.axis}_${Date.now()}.csv`, "i,t_ms,target_nunduk,nunduk,target_kirikanan,kirikanan,servo_nunduk,servo_kirikanan\n" + c.rows.map((r) => [r[0], r[1], ...r.slice(2).map((v) => (v / 100).toFixed(2))].join(",")).join("\n")); };
+$("#stepCsv").onclick = () => { const c = S.lastCap; if (!c) return; download(`uji_respons_${c.axis}_${Date.now()}.csv`, "i,t_ms,target_atas_bawah,atas_bawah,target_kanan_kiri,kanan_kiri,servo_atas_bawah,servo_kanan_kiri\n" + c.rows.map((r) => [r[0], r[1], ...r.slice(2).map((v) => (v / 100).toFixed(2))].join(",")).join("\n")); };
 $("#defTuning").onclick = () => { if (confirm("Kembalikan PID dan kehalusan ke nilai bawaan? Kalibrasi tetap.")) send("DEFAULTS tuning"); };
 $("#defAll").onclick = () => { if (confirm("Kembalikan SEMUA pengaturan, termasuk kalibrasi? Setelah ini jalankan kalibrasi otomatis lagi.")) send("DEFAULTS all"); };
 
 // ======================================================================== diagnostics
-const RST = { poweron: "listrik baru menyala", software: "restart dari perintah", crash: "crash (program error)", watchdog: "macet (watchdog)", brownout: "tegangan turun", deepsleep: "bangun tidur", external: "tombol reset", other: "lainnya" };
+const RST = { poweron: "daya baru dinyalakan", software: "dinyalakan ulang lewat perintah", crash: "galat program (crash)", watchdog: "program macet (watchdog)", brownout: "tegangan turun", deepsleep: "bangun dari mode tidur", external: "tombol reset", other: "lainnya" };
 function renderDiag() {
   const s = S.st; if (!s.fw) return;
   const up = s.up, hh = Math.floor(up / 3600), mm = Math.floor(up % 3600 / 60), ss = up % 60;
   const rows = [
-    ["Firmware", "v" + s.fw], ["Menyala", (hh ? hh + " jam " : "") + mm + " mnt " + ss + " dtk"],
-    ["Restart terakhir", RST[s.rst] || s.rst, s.rst === "brownout" ? "bad" : s.rst === "crash" || s.rst === "watchdog" ? "warn" : ""],
-    ["Restart karena tegangan turun", s.brown + " kali" + (s.brown ? " (cek kapasitor dan power bank)" : ""), s.brown ? "warn" : ""],
-    ["MPU6050", s.imu ? `terbaca, alamat ${s.addr}, WHO_AM_I ${s.who}` : "TIDAK terbaca: cek VCC, GND, SDA, SCL", s.imu ? "" : "bad"],
-    ["Error I2C", s.i2cerr, s.i2cerr > 50 ? "warn" : ""], ["Kecepatan loop", s.hz + " kali/dtk", s.hz < 180 ? "warn" : ""],
-    ["Akselerometer diabaikan (guncangan)", s.accrej + "%"], ["Bias gyro", s.bias.map((v) => fmt(v, 2)).join(" / ") + " °/dtk"],
-    ["Pulsa servo", `nunduk ${s.usp} µs, kiri-kanan ${s.usr} µs`], ["Kabel servo", s.swap ? "tertukar (sudah dikompensasi)" : "normal"],
-    ["Suhu chip", fmt(s.temp) + " °C"], ["Bluetooth", ["tidak tersambung", "tersambung, belum masuk sandi", "tersambung"][s.ble] + (s.ble ? ", MTU " + s.mtu : "")],
+    ["Firmware", "v" + s.fw], ["Menyala", (hh ? hh + " jam " : "") + mm + " menit " + ss + " detik"],
+    ["Penyebab mulai ulang terakhir", RST[s.rst] || s.rst, s.rst === "brownout" ? "bad" : s.rst === "crash" || s.rst === "watchdog" ? "warn" : ""],
+    ["Mulai ulang karena tegangan turun", s.brown + " kali" + (s.brown ? " (periksa kapasitor dan power bank)" : ""), s.brown ? "warn" : ""],
+    ["MPU6050", s.imu ? `terbaca, alamat ${s.addr}, WHO_AM_I ${s.who}` : "tidak terbaca: periksa VCC, GND, SDA, SCL", s.imu ? "" : "bad"],
+    ["Error I2C", s.i2cerr, s.i2cerr > 50 ? "warn" : ""], ["Kecepatan loop", s.hz + " kali/s", s.hz < 180 ? "warn" : ""],
+    ["Akselerometer diabaikan (guncangan)", s.accrej + "%"], ["Bias gyro", s.bias.map((v) => fmt(v, 2)).join(" / ") + " °/s"],
+    ["Pulsa servo", `atas-bawah ${s.usp} µs, kanan-kiri ${s.usr} µs`], ["Kabel servo", s.swap ? "tertukar (sudah dikompensasi)" : "normal"],
+    ["Suhu chip", fmt(s.temp) + " °C"], ["WiFi", (s.rssi ? "sinyal " + s.rssi + " dBm, " : "") + (s.clients || 0) + " perangkat terhubung"],
     ["Memori bebas", Math.round(s.heap / 1024) + " kB"],
   ];
   $("#diagKv").innerHTML = rows.map(([k, v, c]) => `<dt>${k}</dt><dd class="${c || ""}">${v}</dd>`).join("");
@@ -1063,7 +1207,7 @@ function renderDiag() {
 function addEvent(t, text, live) {
   S.events.push([t, text]); if (S.events.length > 60) S.events.shift();
   const log = $("#evLog"); if (S.events.length === 1) log.innerHTML = "";
-  const d = document.createElement("div"), sec = t / 1000; d.innerHTML = `<time>${sec < 100 ? fmt(sec) + " dtk" : Math.round(sec / 60) + " mnt"}</time><span></span>`; d.lastChild.textContent = text; log.prepend(d);
+  const d = document.createElement("div"), sec = t / 1000; d.innerHTML = `<time>${sec < 100 ? fmt(sec) + " s" : Math.round(sec / 60) + " menit"}</time><span></span>`; d.lastChild.textContent = text; log.prepend(d);
   if (live && /ERROR|tegangan turun:|gagal/i.test(text)) toast(text, "bad");
 }
 $("#diagRefresh").onclick = () => send("STATUS");
@@ -1071,17 +1215,58 @@ setInterval(() => { if (S.authed && $("#t-diag").classList.contains("on")) send(
 $("#copyReport").onclick = async () => {
   const tel = S.tel.slice(-50), stat = (k) => { if (!tel.length) return "-"; const v = tel.map((d) => d[k]), m = v.reduce((a, b) => a + b, 0) / v.length, sd = Math.sqrt(v.reduce((a, b) => a + (b - m) ** 2, 0) / v.length); return `${m.toFixed(2)} ± ${sd.toFixed(2)}`; };
   const txt = ["LAPORAN DEBUG GIMBAL D435", "waktu: " + new Date().toISOString(), "sambungan: " + S.kind + ", browser: " + navigator.userAgent, "CFG " + JSON.stringify(S.cfg), "ST " + JSON.stringify(S.st),
-    `5 detik terakhir: nunduk ${stat("p")} (target ${S.lastT ? S.lastT.sp : "-"}), kiri-kanan ${stat("r")}, servo ${stat("op")} / ${stat("or")}`, "kejadian:", ...S.events.map(([t, s]) => `  ${(t / 1000).toFixed(1)}s ${s}`), S.lastCap ? "uji respons terakhir: " + $("#stepMetrics").innerText.replace(/\n/g, " ") : ""].join("\n");
+    `5 detik terakhir: atas-bawah ${stat("p")} (target ${S.lastT ? S.lastT.sp : "-"}), kanan-kiri ${stat("r")}, servo ${stat("op")} / ${stat("or")}`, "kejadian:", ...S.events.map(([t, s]) => `  ${(t / 1000).toFixed(1)}s ${s}`), S.lastCap ? "uji respons terakhir: " + $("#stepMetrics").innerText.replace(/\n/g, " ") : ""].join("\n");
   try { await navigator.clipboard.writeText(txt); toast("Laporan disalin. Tempel di chat.", "ok"); } catch (e) { const ta = document.createElement("textarea"); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); toast("Laporan disalin", "ok"); }
 };
-function stopRec() { const r = S.rec; S.rec = null; $("#recBtn").textContent = "Rekam 30 detik"; if (r && r.rows.length) download(`rekaman_gimbal_${Date.now()}.csv`, "T,t_ms,nunduk,kirikanan,target_nunduk,target_kirikanan,servo_nunduk,servo_kirikanan,laju_nunduk,laju_kirikanan,mode,flags\n" + r.rows.join("\n")); }
-$("#recBtn").onclick = () => { if (S.rec) return stopRec(); S.rec = { t0: Date.now(), rows: [] }; $("#recBtn").textContent = "Berhenti dan unduh"; toast("Merekam 30 detik. Coba berjalan atau goyangkan.", "ok"); };
-$("#rebootBtn").onclick = () => { if (confirm("Restart gimbal sekarang?")) send("REBOOT"); };
+function stopRec() { const r = S.rec; S.rec = null; $("#recBtn").textContent = "Rekam 30 detik"; if (r && r.rows.length) download(`rekaman_gimbal_${Date.now()}.csv`, "T,t_ms,atas_bawah,kanan_kiri,target_atas_bawah,target_kanan_kiri,servo_atas_bawah,servo_kanan_kiri,laju_atas_bawah,laju_kanan_kiri,mode,flags\n" + r.rows.join("\n")); }
+$("#recBtn").onclick = () => { if (S.rec) return stopRec(); S.rec = { t0: Date.now(), rows: [] }; $("#recBtn").textContent = "Berhenti dan unduh"; toast("Merekam selama 30 detik. Silakan berjalan atau gerakkan gimbal.", "ok"); };
+$("#rebootBtn").onclick = () => { if (confirm("Nyalakan ulang gimbal sekarang?")) send("REBOOT"); };
 $("#termForm").addEventListener("submit", (e) => { e.preventDefault(); const v = $("#termIn").value.trim(); if (v) { send(v); $("#termIn").value = ""; } });
 
 // ======================================================================== device / security
 $("#pinSave").onclick = () => { const a = $("#pinNew").value.trim(), b = $("#pinNew2").value.trim(); $("#pinErr").textContent = ""; if (!/^[A-Za-z0-9]{4,12}$/.test(a)) { $("#pinErr").textContent = "Sandi harus 4–12 huruf atau angka."; return; } if (a !== b) { $("#pinErr").textContent = "Kedua sandi tidak sama."; return; } S.pendingNewPin = a; send("PIN " + a); };
-$("#pinForget").onclick = () => { store.del("gimbalPin"); toast("Sandi tersimpan dihapus dari browser ini"); };
+$("#pinForget").onclick = () => { store.del(PIN_KEY); toast("Sandi tersimpan dihapus dari perangkat ini"); };
+// ---- WiFi
+const hex = (t) => [...enc.encode(t)].map((b) => b.toString(16).padStart(2, "0")).join("");
+const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const sinyal = (r) => (r >= -60 ? "kuat" : r >= -72 ? "cukup" : "lemah");
+function onWifi(rest) {
+  if (rest.startsWith("LIST ")) {
+    const list = parseJson(rest.slice(5)) || [];
+    $("#wifiList").innerHTML = list.length ? list.map((n) => `<button type="button" data-s="${esc(n.s)}"><span>${esc(n.s)}${n.k ? "" : " (terbuka)"}</span><small class="muted">sinyal ${sinyal(n.r)}</small></button>`).join("") : '<p class="muted">Tidak ada hotspot yang terdeteksi. Pastikan hotspot ponsel aktif.</p>';
+    $$("#wifiList button").forEach((b) => (b.onclick = () => { $("#wifiSsid").value = b.dataset.s; $("#wifiPass").focus(); }));
+    $("#wifiScan").disabled = false; $("#wifiScan").textContent = "Cari hotspot";
+    return;
+  }
+  const w = parseJson(rest); if (!w) return; S.wifi = w;
+  const viaSetup = location.hostname === w.apip || location.hostname === "192.168.4.1";
+  let now;
+  if (!w.on) now = "WiFi gimbal nonaktif. Aktifkan lewat USB dengan perintah WIFI ON.";
+  else if (w.sta) now = `Terhubung ke ${w.ssid}, sinyal ${sinyal(w.rssi)}.`;
+  else if (w.saved) now = `Mencari hotspot ${w.ssid}…` + (w.ap ? " Sementara itu WiFi gimbal sendiri menyala." : "");
+  else now = "Belum ada hotspot tersimpan. Pilih hotspot ponsel Anda di bawah.";
+  $("#wifiNow").textContent = now;
+  if (w.ssid && !$("#wifiSsid").value && document.activeElement !== $("#wifiSsid")) $("#wifiSsid").value = w.ssid;
+  const box = $("#wifiAddr");
+  if (w.sta && w.ip) {
+    box.hidden = false;
+    box.innerHTML = `<span class="muted">${viaSetup ? "Gimbal sudah terhubung ke hotspot. Hubungkan ponsel atau iPad ke " + esc(w.ssid) + ", lalu buka:" : "Alamat gimbal:"}</span><b><a href="http://${esc(w.host)}.local/">${esc(w.host)}.local</a></b><span class="muted">atau ${esc(w.ip)} kalau alamat di atas tidak terbuka</span>` +
+      (viaSetup && w.ap ? '<div class="row" style="margin-top:6px"><button class="btn" id="apOffBtn" type="button">Selesai, matikan WiFi gimbal</button></div>' : "");
+    const b = $("#apOffBtn"); if (b) b.onclick = () => send("WIFI APOFF");
+  } else box.hidden = true;
+  $("#apInfo").textContent = (w.ap ? `Sedang menyala: ${w.apssid}. ` : "") + "Menyala otomatis apabila hotspot Anda tidak ditemukan dalam 20 detik.";
+  if (w.host) { $("#hostLink").href = `http://${w.host}.local/`; $("#nameNote").textContent = `Nama ini juga menjadi alamatnya: ${w.host}.local. Berlaku setelah dinyalakan ulang.`; }
+  if (w.clients) { S.clients = w.clients; if ($("#pill").dataset.s === "ok") pillOk(); }
+}
+$("#wifiScan").onclick = () => { $("#wifiScan").disabled = true; $("#wifiScan").textContent = "Mencari…"; $("#wifiList").innerHTML = ""; send("WIFI SCAN"); setTimeout(() => { $("#wifiScan").disabled = false; $("#wifiScan").textContent = "Cari hotspot"; }, 9000); };
+$("#wifiJoin").onclick = () => {
+  const ss = $("#wifiSsid").value.trim(), pw = $("#wifiPass").value; $("#wifiErr").textContent = "";
+  if (!ss) { $("#wifiErr").textContent = "Isi nama hotspot dulu."; return; }
+  if (pw && pw.length < 8) { $("#wifiErr").textContent = "Sandi hotspot minimal 8 karakter."; return; }
+  send(`WIFI JOIN ${hex(ss)} ${hex(pw)}`);
+};
+$("#wifiForget").onclick = () => { if (confirm("Lupakan hotspot ini? Gimbal akan menyalakan WiFi-nya sendiri.")) send("WIFI FORGET"); };
+$("#apPassSave").onclick = () => { const v = $("#apPassIn").value; if (v.length < 8 || v.length > 32) { $("#wifiErr").textContent = "Sandi WiFi gimbal 8–32 karakter."; return; } send("WIFI AP " + hex(v)); };
 $("#nameSave").onclick = () => { const v = $("#nameIn").value.trim().replace(/\s+/g, "_"); if (v.length >= 2) send("NAME " + v); };
 
 // ======================================================================== nav + boot
@@ -1093,7 +1278,7 @@ $$(".tab").forEach((t) => t.addEventListener("click", () => {
   if (t.dataset.tab === "kontrol") drawLive();
   if (t.dataset.tab === "pid") drawStep();
 }));
-$("#btnBle").onclick = () => connect("ble");
+$("#btnWifi").onclick = () => connect("wifi");
 $("#btnUsb").onclick = () => connect("usb");
 $("#btnDemo").onclick = () => connect("demo");
 $("#btnDisconnect").onclick = () => disconnect();
@@ -1102,6 +1287,7 @@ function setView(x) { $("#viewSolid").setAttribute("aria-pressed", !x); $("#view
 $("#viewSolid").onclick = () => setView(false);
 $("#viewXray").onclick = () => setView(true);
 supportNote();
+if (ON_DEVICE) connect("wifi");   // opened from the gimbal: connect right away
 window.addEventListener("resize", () => { drawLive(); drawStep(); });
 fetch("skema_rangkaian.svg").then((r) => (r.ok ? r.text() : Promise.reject())).then((svg) => { $("#schemHost").innerHTML = svg; const s = $("#schemHost svg"); if (s) s.classList.add("schem"); }).catch(() => { $("#schemHost").innerHTML = '<p class="note">Gambar skema ada di file skema_rangkaian.svg.</p>'; });
 </script>
