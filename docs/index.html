@@ -319,7 +319,7 @@ body.demo .demochip{display:inline-block}
       <div class="card steps">
         <div class="step" id="calAutoLi"><span class="n">1</span><div class="b">
           <h3>Kalibrasi otomatis</h3>
-          <p class="muted">Tegakkan dudukan seperti saat dipakai, dengan kamera mengarah ke bawah. Jangan disentuh selama ±10 detik.</p>
+          <p class="muted">Tegakkan dudukan seperti saat dipakai, dengan kamera mengarah ke bawah. Jangan disentuh selama ±20 detik.</p>
           <div class="row"><button class="btn primary" id="calAuto">Mulai kalibrasi otomatis</button></div>
           <div class="progress" id="calAutoOut" hidden></div>
         </div></div>
@@ -384,8 +384,9 @@ body.demo .demochip{display:inline-block}
           <label class="field"><span>Lambat servo (ms)</span><input type="number" step="0.5" min="5" max="120" data-key="stau"></label>
         </div>
         <p class="muted" style="margin:2px 0 12px;font-size:13px">Kedua nilai ini diukur otomatis saat kalibrasi otomatis.</p>
-        <div class="field"><div class="t2"><span>Zona mati servo</span><span class="val" data-show="sdb"></span></div><input type="range" data-key="sdb" min="0" max="20" step="0.5"><p>Perubahan sekecil ini diabaikan oleh servo. Mencegah servo berdengung.</p></div>
-        <div class="field"><div class="t2"><span>Kompensasi zona mati</span><span class="val" data-show="dbcomp"></span></div><input type="range" data-key="dbcomp" min="0" max="10" step="0.5"><p>Mulailah dari 0. Naikkan perlahan jika kamera sedikit tertinggal; turunkan jika servo berdengung.</p></div>
+        <div class="field"><div class="t2"><span>Pola langkah</span><span class="val" data-show="gait"></span></div><input type="range" data-key="gait" min="0" max="1" step="0.05"><p>Gimbal mempelajari irama langkah Anda, lalu menggerakkan servo atas-bawah sedikit sebelum hentakan tiap langkah. Berlaku juga untuk langkah kanan dan kiri yang berbeda, misalnya saat naik tangga. 0 = mati.</p></div>
+        <div class="field"><div class="t2"><span>Lebar zona mati servo</span><span class="val" data-show="sdb"></span></div><input type="range" data-key="sdb" min="0" max="40" step="0.5"><p>Seperti pada spesifikasi servo (MG90S: 10 µs). Diukur otomatis saat kalibrasi otomatis.</p></div>
+        <div class="field"><div class="t2"><span>Kompensasi zona mati</span><span class="val" data-show="dbcomp"></span></div><input type="range" data-key="dbcomp" min="0" max="10" step="0.5"><p>Diisi otomatis seperempat lebar zona mati. Turunkan jika servo berdengung saat diam.</p></div>
         <div class="field"><div class="t2"><span>Akselerometer saat berjalan</span><span class="val" data-show="acctauw"></span></div><input type="range" data-key="acctauw" min="0.3" max="10" step="0.1"><p>Makin besar, hentakan langkah makin tidak terbaca sebagai kemiringan.</p></div>
       </div>
       <div class="card">
@@ -692,15 +693,18 @@ class SerialLink {
   send(line) { return this.writer.write(enc.encode(line + "\n")).catch(() => {}); }
   async close() { try { await this.reader.cancel(); } catch (e) {} try { this.writer.releaseLock(); await this.port.close(); } catch (e) {} }
 }
-// demo: a simulated gimbal speaking the same protocol. The stabiliser is the firmware's own (4.1, same
-// steps and settings); the plant is the one the firmware is tested against:
+// demo: a simulated gimbal speaking the same protocol. The stabiliser is the firmware's own (4.2, same
+// steps and settings, walking pattern included); the plant is the one the firmware is tested against:
 //  - body: walks 18 s, stands 7 s; at the belt: left-right at the stride (0.9 Hz), nod at every step
-//    (1.8 Hz), a jolt at each heel strike, plus slow leaning
-//  - MG90S: reads a new pulse once per frame (100 Hz), ignores changes under 6 us, 25 ms lag, 500 deg/s
+//    (1.8 Hz), a jolt at each heel strike, plus slow leaning; each step a little early or late (2 %)
+//  - the servo bought for it (MG90S compatible): reads a new pulse once per frame (100 Hz), dead band width
+//    10 us (does nothing within 5 us of its position), 25 ms lag, 545 deg/s (0.11 s/60 deg)
 //  - MPU6050: 4.8 ms filter delay, plus the small error walking leaves in the angle estimate
-const DEMO_TUNING = { kp: 0.6, gain: 10, ff: 0.8, db: 0.2, smooth: 0.02, maxrate: 400, acctau: 0.6, acctauw: 3, ffb: 1, pred: 1.1, sdb: 6, dbcomp: 0, dlpf: 3, pwmhz: 100 };
-const SRV_US_TRUE = 11.0, SRV_DB_US = 6, SRV_TAU = 0.025, SRV_VMAX = 500;
+const DEMO_TUNING = { kp: 0.6, gain: 10, ff: 0.8, db: 0.2, smooth: 0.02, maxrate: 400, acctau: 0.6, acctauw: 3, ffb: 1, pred: 1.1, sdb: 10, dbcomp: 2.5, dlpf: 3, pwmhz: 100, gait: 1 };
+const SRV_US_TRUE = 11.0, SRV_DB_US = 10, SRV_TAU = 0.025, SRV_VMAX = 545;
+const GAIT_K = 12;
 const clampN = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const gauss = () => Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
 const softDB = (e, db) => (e > db ? e - db : e < -db ? e + db : 0);
 class DemoLink {
   constructor() { this.onLine = null; this.onClose = null; }
@@ -709,11 +713,44 @@ class DemoLink {
     this.pin = "123456"; this.authed = true; this.nonce = "";   // a simulation has nothing to protect: no PIN
     this.cfg = { pitch: 35, roll: 0, ...DEMO_TUNING, autobias: 1, bootgyro: 1, nod: 1, trimp: 0, trimr: 0, dirp: 1, dirr: 1, swap: 0, usdegp: 10.5, usdegr: 10.5, limp: 25, limr: 25, lvlp: 0, lvlr: 0, axes: "+X+Y+Z", tel: 20, led: 1, startmode: 0, name: "Gimbal D435", cal: 4, defpin: 1, mode: "center", sdelay: 15, stau: 25 };
     this.ax = [this.newAxis(), this.newAxis()];   // [pitch, roll]
-    this.ms = 0; this.n = 0; this.wall = performance.now(); this.man = [0, 0]; this.stepOff = [0, 0]; this.stepRun = null; this.b = this.body(0);
-    this.ev = [[1200, "Menyala (fw 4.1). Penyebab mulai ulang: poweron. Total mulai ulang karena tegangan turun: 0"], [1250, "Belum dikalibrasi: servo ditahan di tengah. Jalankan kalibrasi otomatis."]];
+    this.ms = 0; this.n = 0; this.wall = performance.now(); this.man = [0, 0]; this.stepOff = [0, 0]; this.stepRun = null;
+    this.gp = 0; this.gj = 0; this.b = this.body(0); this.resetGait();
+    this.ev = [[1200, "Menyala (fw 4.2). Penyebab mulai ulang: poweron. Total mulai ulang karena tegangan turun: 0"], [1250, "Belum dikalibrasi: servo ditahan di tengah. Jalankan kalibrasi otomatis."]];
     this.timer = setInterval(() => this.tick(), 20);
   }
   newAxis() { return { motor: 0, pulse: 0, pending: 0, f1: 0, f2: 0, f2Prev: 0, meas: 0, rate: 0, cmd: 0, slew: 0, out: 0, ff: 0, last: 0, sat: false, hist: new Float32Array(48), hi: 0, m: 0, mrate: 0, dbSg: 0, dbPk: 0 }; }
+  resetGait() {   // the firmware's walking pattern (stride clock + learned atas-bawah correction)
+    this.g = { h1: 0, l1: 0, l2: 0, l2p: 0, thp: 0, w: 2 * Math.PI * 0.9, ph: 0, amp: 0, u: 0, tick: 0, a: new Float64Array(GAIT_K), b: new Float64Array(GAIT_K), cth: new Float64Array(GAIT_K), sth: new Float64Array(GAIT_K), gin: new Float64Array(GAIT_K) };
+    this.gaitPhase();
+  }
+  gaitPhase() {
+    const c = this.cfg, g = this.g, d = c.sdelay / 1000, tau = c.stau / 1000, sm = c.smooth;
+    for (let j = 0; j < GAIT_K; j++) {
+      const w = (j + 1) * g.w, th = w * d + Math.atan(w * tau) + Math.atan(w * sm);
+      g.cth[j] = Math.cos(th); g.sth[j] = Math.sin(th); g.gin[j] = Math.min(Math.sqrt((1 + w * w * tau * tau) * (1 + w * w * sm * sm)), 3);
+    }
+  }
+  gaitStep(bodyRoll, err, learn, dt) {
+    const g = this.g, TP = 2 * Math.PI, wrap = (a) => a - TP * Math.round(a / TP);
+    g.h1 += (bodyRoll - g.h1) * dt / 0.4;
+    const k = TP * 1.3 * dt; g.l1 += (bodyRoll - g.h1 - g.l1) * k; g.l2 += (g.l1 - g.l2) * k;
+    const d = (g.l2 - g.l2p) / dt; g.l2p = g.l2;
+    const q = d / g.w, th = Math.atan2(g.l2, q), dth = wrap(th - g.thp); g.thp = th;
+    g.amp += (Math.hypot(g.l2, q) - g.amp) * dt / 0.5;
+    g.w += (clampN(dth / dt, TP * 0.4, TP * 1.8) - g.w) * dt;
+    g.ph = wrap(g.ph + g.w * dt + 3 * dt * wrap(th - g.ph));
+    if (++g.tick >= 10) { g.tick = 0; this.gaitPhase(); }
+    let u = 0; const sk = [], ck = [];
+    for (let j = 0; j < GAIT_K; j++) { sk[j] = Math.sin((j + 1) * g.ph); ck[j] = Math.cos((j + 1) * g.ph); u += g.a[j] * sk[j] + g.b[j] * ck[j]; }
+    g.u = u;
+    if (!learn || g.amp < 0.5) return;
+    const leak = 1 - 0.03 * dt;
+    for (let j = 0; j < GAIT_K; j++) {
+      const sd = sk[j] * g.cth[j] - ck[j] * g.sth[j], cd = ck[j] * g.cth[j] + sk[j] * g.sth[j], e = 0.005 * g.gin[j] * err;
+      g.a[j] = clampN(g.a[j] * leak + e * sd, -6, 6); g.b[j] = clampN(g.b[j] * leak + e * cd, -6, 6);
+    }
+  }
+  gaitAdd() { return (this.cfg.gait || 0) * this.b.walk * Math.min(this.g.amp / 0.8, 1) * this.g.u; }
   resetCtl() { for (const a of this.ax) { Object.assign(a, { cmd: 0, slew: 0, out: 0, ff: 0, last: 0, m: 0, mrate: 0, dbSg: 0, dbPk: 0 }); a.hist.fill(0); } }
   rand() { return [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join(""); }
   out(l) { setTimeout(() => this.onLine && this.onLine(l), 15); }
@@ -727,26 +764,29 @@ class DemoLink {
     this.wall += n * 5; n = Math.min(n, 100);
     while (n--) { for (let k = 0; k < 5; k++) this.physics(); this.control(0.005); }
   }
-  body(t) {
+  body(t) {   // this.gp = steps taken (1.8 per second, each step a little early or late)
     const W = 2 * Math.PI, cyc = t % 25, walk = clampN(Math.min((cyc - 1) / 1.5, (19 - cyc) / 1.5), 0, 1);
-    const ph = (t * 1.8) % 1, heel = ph < 0.108 ? 0.5 - 0.5 * Math.cos(W * ph / 0.108) : 0;
+    const s2 = W * this.gp, ph = this.gp % 1, heel = ph < 0.108 ? 0.5 - 0.5 * Math.cos(W * ph / 0.108) : 0;
     return {
       walk,
-      p: 5 * Math.sin(W * 0.06 * t) + walk * (2.0 * Math.sin(W * 1.8 * t + 1) + 0.6 * Math.sin(W * 3.6 * t + 0.3) + 0.8 * heel),
-      r: 4 * Math.sin(W * 0.045 * t + 1) + walk * (3.5 * Math.sin(W * 0.9 * t) + 0.8 * Math.sin(W * 1.8 * t + 0.7)),
+      p: 5 * Math.sin(W * 0.06 * t) + walk * (2.0 * Math.sin(s2 + 1) + 0.6 * Math.sin(2 * s2 + 0.3) + 0.8 * heel),
+      r: 4 * Math.sin(W * 0.045 * t + 1) + walk * (3.5 * Math.sin(s2 / 2) + 0.8 * Math.sin(s2 + 0.7)),
       // what walking leaves in the firmware's angle estimate (measured in the physics test: ~0.2 deg)
       eP: walk * 0.18 * Math.sin(W * 1.8 * t + 2.0), eR: walk * 0.2 * Math.sin(W * 0.9 * t + 1.2),
     };
   }
   physics() {
-    const dt = 0.001; this.ms++; const t = this.ms / 1000, b = (this.b = this.body(t));
+    const dt = 0.001; this.ms++; const t = this.ms / 1000;
+    this.gj += -this.gj * dt / 0.6 + 0.02 * Math.sqrt(2 * dt / 0.6) * gauss();
+    this.gp += 1.8 * (1 + this.gj) * dt;
+    const b = (this.b = this.body(t));
     const per = Math.max(3, Math.round(1000 / (this.cfg.pwmhz || 100))), latch = this.ms % per === 2 % per;   // the servo reads a new pulse once per frame
     for (let i = 0; i < 2; i++) {
       const a = this.ax[i];
       if (latch) a.pulse = a.pending;
       if (a.pulse !== null) {
         const err = a.pulse - a.motor;
-        if (Math.abs(err) > SRV_DB_US / SRV_US_TRUE) a.motor += clampN(err / SRV_TAU, -SRV_VMAX, SRV_VMAX) * dt;
+        if (Math.abs(err) > 0.5 * SRV_DB_US / SRV_US_TRUE) a.motor += clampN(err / SRV_TAU, -SRV_VMAX, SRV_VMAX) * dt;
       }
       const truth = (i ? 0 : NOMINAL) + (i ? b.r : b.p) + a.motor, k = dt / (0.0024 + dt);
       a.f1 += (truth - a.f1) * k; a.f2 += (a.f1 - a.f2) * k;    // MPU6050 filter
@@ -756,14 +796,14 @@ class DemoLink {
     const c = this.cfg; a.hist[a.hi] = out; a.hi = (a.hi + 1) % 48;
     const d = clampN(c.sdelay / 1000 / dt, 0, 46), d0 = Math.floor(d), fr = d - d0;
     const x = a.hist[(a.hi + 47 - d0) % 48], y = a.hist[(a.hi + 46 - d0) % 48], del = x + (y - x) * fr;
-    const k = 1 - Math.exp(-dt / Math.max(c.stau / 1000, 0.002)), db = Math.max(c.sdb - c.dbcomp, 0) / Math.max(usdeg, 1);
+    const k = 1 - Math.exp(-dt / Math.max(c.stau / 1000, 0.002)), db = Math.max(0.5 * c.sdb - c.dbcomp, 0) / Math.max(usdeg, 1);
     const err = del - a.m, prev = a.m;
     if (Math.abs(err) > db) a.m += (err - Math.sign(err) * db) * k;
     a.mrate = (a.m - prev) / dt;
   }
   dbComp(a, us) {
     const c = this.cfg;
-    if (c.dbcomp <= 0) { a.dbPk = us; a.dbSg = 0; return us; }
+    if (c.dbcomp <= 0 || c.mode !== "stab") { a.dbPk = us; a.dbSg = 0; return us; }
     if (a.dbSg >= 0 && us < a.dbPk - 1) { a.dbSg = -1; a.dbPk = us; }
     else if (a.dbSg <= 0 && us > a.dbPk + 1) { a.dbSg = 1; a.dbPk = us; }
     else if ((a.dbSg > 0 && us > a.dbPk) || (a.dbSg < 0 && us < a.dbPk)) a.dbPk = us;
@@ -784,6 +824,11 @@ class DemoLink {
       if (c.mode === "stab") {
         const e = softDB(sp[i] - a.meas, c.db);
         a.ff = c.ffb * (sp[i] - (a.meas - a.m) - lead * (a.rate - a.mrate));     // turn against the body right away
+        if (i === 0) {   // atas-bawah: plus the learned walking pattern, ahead of each step
+          const R = this.ax[1];
+          this.gaitStep(R.meas - R.m, sp[0] - a.meas, b.walk > 0.5 && !a.sat && c.gait > 0, dt);
+          a.ff += this.gaitAdd();
+        }
         const ii = clampN(a.cmd + (c.gain * e - c.ff * a.rate) * dt, -L, L);
         const t0 = a.ff + ii + c.kp * e;
         if (!((t0 > L && e > 0) || (t0 < -L && e < 0))) a.cmd = ii;
@@ -811,14 +856,14 @@ class DemoLink {
   }
   async send(line) {
     const [cmd, a1, a2, a3] = line.trim().split(/\s+/); const C = cmd.toUpperCase(), c = this.cfg;
-    if (C === "HELLO") return this.out(`HELLO {"fw":"4.1","name":"${c.name}","auth":0,"nonce":"","lock":0,"clients":1}`);
+    if (C === "HELLO") return this.out(`HELLO {"fw":"4.2","name":"${c.name}","auth":0,"nonce":"","lock":0,"clients":1}`);
     if (C === "AUTH") return this.out("AUTH OK");
     if (C === "PING") return this.out("PONG " + this.now());
     if (!this.authed) return this.out("ERR AUTH");
     const [P, R] = this.ax;
     switch (C) {
       case "GET": return this.out(this.cfgLine());
-      case "STATUS": return this.out(`ST {"fw":"4.1","up":${Math.round(this.now() / 1000)},"hz":200,"rst":"poweron","boots":7,"brown":0,"imu":1,"who":"0x68","addr":"0x68","i2cerr":0,"temp":38.4,"bias":[1.21,-0.79,0.48],"heap":181240,"clients":1,"rssi":-54,"mode":"${c.mode}","cal":"${this.cal ? this.cal.kind : "idle"}","still":${this.b.walk > 0 ? 0 : 1},"accrej":3,"usp":${(1500 + P.out * c.usdegp).toFixed(0)},"usr":${(1500 + R.out * c.usdegr).toFixed(0)},"swap":${c.swap},"walk":${this.b.walk.toFixed(2)},"ffp":${P.ff.toFixed(2)},"ffr":${R.ff.toFixed(2)},"ip":${P.cmd.toFixed(2)},"ir":${R.cmd.toFixed(2)}}`);
+      case "STATUS": return this.out(`ST {"fw":"4.2","up":${Math.round(this.now() / 1000)},"hz":200,"rst":"poweron","boots":7,"brown":0,"imu":1,"who":"0x68","addr":"0x68","i2cerr":0,"temp":38.4,"bias":[1.21,-0.79,0.48],"heap":181240,"clients":1,"rssi":-54,"mode":"${c.mode}","cal":"${this.cal ? this.cal.kind : "idle"}","still":${this.b.walk > 0 ? 0 : 1},"accrej":3,"usp":${(1500 + P.out * c.usdegp).toFixed(0)},"usr":${(1500 + R.out * c.usdegr).toFixed(0)},"swap":${c.swap},"walk":${this.b.walk.toFixed(2)},"ffp":${P.ff.toFixed(2)},"ffr":${R.ff.toFixed(2)},"ip":${P.cmd.toFixed(2)},"ir":${R.cmd.toFixed(2)},"stride":${(this.g.w / 2 / Math.PI).toFixed(2)},"sway":${this.g.amp.toFixed(1)},"gaitp":${this.gaitAdd().toFixed(2)}}`);
       case "EVLOG": this.ev.slice(-16).forEach(([t, s]) => this.out(`EV ${t} ${s}`)); return this.out("EVEND");
       case "SET": { const k = (a1 || "").toLowerCase(); if (k === "axes") c.axes = a2; else if (k in c) c[k] = Number(a2); return this.out(this.cfgLine()); }
       case "MODE": {
@@ -864,10 +909,17 @@ class DemoLink {
       this.cal = { kind, mv: [0, 0] };
       const plan = [[3200, () => this.out("CAL STEP gyro ok")], [4000, () => { this.out("CAL STEP servo3 move"); this.cal.mv = [14, 0]; }], [5900, () => { this.cal.mv = [0, 0]; }], [6800, () => { this.out("CAL STEP servo4 move"); this.cal.mv = [0, 14]; }], [8700, () => { this.cal.mv = [0, 0]; }], [9600, () => this.out("CAL STEP timing")]];
       for (let k = 0; k < 8; k++) plan.push([9600 + k * 305, () => { if (this.cal) this.cal.mv = k < 4 ? [k % 2 ? 0 : 5.5, 0] : [0, k % 2 ? 0 : 5.5]; }]);
-      plan.push([9600 + 8 * 305, () => {
+      // dead band: back to the centre from below and from above, twice per servo (250 ms swing, 600 ms rest)
+      let tt = 9600 + 8 * 305; plan.push([tt, () => this.out("CAL STEP deadband")]);
+      for (let s = 0; s < 2; s++) for (let k = 0; k < 8; k++) {
+        const v = k % 2 ? 0 : (k % 4 === 0 ? -3.6 : 3.6);
+        plan.push([tt, () => { if (this.cal) this.cal.mv = s ? [0, v] : [v, 0]; }]); tt += k % 2 ? 600 : 250;
+      }
+      plan.push([tt, () => {
         this.cal = null; this.resetCtl();
-        Object.assign(c, { axes: "-X+Y-Z", swap: 1, dirp: -1, dirr: 1, usdegp: 11.08, usdegr: 10.95, lvlp: 0, lvlr: 0, sdelay: 11.6, stau: 20.4, mode: "stab" }); c.cal = (c.cal | 5) & ~2;
-        this.out('CAL DONE auto {"axes":"-X+Y-Z","swap":1,"dirp":-1,"dirr":1,"usdegp":11.08,"usdegr":10.95,"gyrop":13.4,"gyror":13.6,"accp":-13.5,"accr":13.7,"align":0.99,"bias":[1.20,-0.80,0.50],"levelreset":1,"sdelay":11.6,"stau":20.4,"tsteps":8}'); this.out(this.cfgLine());
+        Object.assign(c, { axes: "-X+Y-Z", swap: 1, dirp: -1, dirr: 1, usdegp: 11.02, usdegr: 11.06, lvlp: 0, lvlr: 0, sdelay: 6.1, stau: 22.0, sdb: 10.4, dbcomp: 2.6, mode: "stab" }); c.cal = (c.cal | 5) & ~2;
+        this.out('CAL DONE auto {"axes":"-X+Y-Z","swap":1,"dirp":-1,"dirr":1,"usdegp":11.02,"usdegr":11.06,"gyrop":13.4,"gyror":13.6,"accp":-13.6,"accr":13.6,"align":0.99,"bias":[1.20,-0.80,0.50],"levelreset":1,"sdelay":6.1,"stau":22.0,"tsteps":8,"sdbp":10.3,"sdbr":10.5,"sdb":10.4,"dbcomp":2.6}'); this.out(this.cfgLine());
+        this.out(`EV ${this.now()} Zona mati servo: atas-bawah 10 us, kanan-kiri 11 us (dipakai 10 us)`);
       }]);
       plan.forEach(([t, f]) => setTimeout(f, t));
     }
@@ -1087,7 +1139,7 @@ function drawLive() {
 // ======================================================================== settings binding
 function showVal(key, v) {
   const units = { db: "°", smooth: " s", maxrate: "°/s", acctau: " s", acctauw: " s", tel: "×/s", sdb: " µs", dbcomp: " µs" };
-  const dd = { kp: 2, gain: 1, ff: 2, db: 2, smooth: 3, maxrate: 0, acctau: 2, tel: 0, ffb: 2, pred: 2, acctauw: 1 }[key] ?? 1;
+  const dd = { kp: 2, gain: 1, ff: 2, db: 2, smooth: 3, maxrate: 0, acctau: 2, tel: 0, ffb: 2, pred: 2, acctauw: 1, gait: 2 }[key] ?? 1;
   $$(`[data-show="${key}"]`).forEach((e) => (e.textContent = fmt(v, dd) + (units[key] || "")));
 }
 function applyCfg(c) {
@@ -1138,11 +1190,11 @@ function onCal(rest) {
   const [what, kind, ...more] = rest.split(" "), tail = more.join(" ");
   const box = { auto: "#calAutoOut", gyro: "#calGyroOut", level: "#calLevelOut" };
   const show = (k, html, cls) => { const b = $(box[k] || "#calAutoOut"); b.hidden = false; b.className = "progress " + (cls || ""); b.innerHTML = html; };
-  if (what === "START") { show(kind, kind === "auto" ? "Langkah 1 dari 4: mengukur gyro dan arah gravitasi. Jangan disentuh…" : kind === "gyro" ? "Mengukur gyro selama 2 detik…" : "Mengukur sudut…"); return; }
-  if (what === "STEP") { show("auto", kind === "timing" ? "Langkah 4 dari 4: mengukur kecepatan servo dengan gerakan kecil yang cepat…" : kind === "servo4" ? "Langkah 3 dari 4: menggerakkan servo di GPIO4…" : "Langkah 2 dari 4: menggerakkan servo di GPIO3…"); return; }
+  if (what === "START") { show(kind, kind === "auto" ? "Langkah 1 dari 5: mengukur gyro dan arah gravitasi. Jangan disentuh…" : kind === "gyro" ? "Mengukur gyro selama 2 detik…" : "Mengukur sudut…"); return; }
+  if (what === "STEP") { show("auto", kind === "deadband" ? "Langkah 5 dari 5: mengukur zona mati masing-masing servo…" : kind === "timing" ? "Langkah 4 dari 5: mengukur kecepatan servo dengan gerakan kecil yang cepat…" : kind === "servo4" ? "Langkah 3 dari 5: menggerakkan servo di GPIO4…" : "Langkah 2 dari 5: menggerakkan servo di GPIO3…"); return; }
   if (what === "DONE") {
     const j = parseJson(tail) || {};
-    if (kind === "auto") { show("auto", `Selesai. Sumbu MPU6050 <b>${j.axes}</b>, kabel servo ${j.swap ? "<b>tertukar, sudah dibetulkan otomatis</b>" : "benar"}, skala servo ${fmt(j.usdegp, 2)} dan ${fmt(j.usdegr, 2)} µs per derajat${j.stau ? `, servo bereaksi setelah ${fmt(j.sdelay, 0)} ms dan sampai dalam ${fmt(j.stau, 0)} ms` : ""}.${j.levelreset ? " Lanjutkan ke kalibrasi datar." : ""}`, "ok"); chime(true); toast("Kalibrasi otomatis selesai", "ok"); }
+    if (kind === "auto") { show("auto", `Selesai. Sumbu MPU6050 <b>${j.axes}</b>, kabel servo ${j.swap ? "<b>tertukar, sudah dibetulkan otomatis</b>" : "benar"}, skala servo ${fmt(j.usdegp, 2)} dan ${fmt(j.usdegr, 2)} µs per derajat${j.stau ? `, servo bereaksi setelah ${fmt(j.sdelay, 0)} ms dan sampai dalam ${fmt(j.stau, 0)} ms` : ""}${j.sdb ? `, zona mati servo ${fmt(j.sdbp, 0)} dan ${fmt(j.sdbr, 0)} µs` : ""}.${j.levelreset ? " Lanjutkan ke kalibrasi datar." : ""}`, "ok"); chime(true); toast("Kalibrasi otomatis selesai", "ok"); }
     else if (kind === "gyro") show("gyro", `Selesai. Derau ${fmt(j.noise, 3)}°/s.`, "ok");
     else if (kind === "level") show("level", `Selesai. Koreksi atas-bawah ${fmt(j.lvlp, 2)}°, kanan-kiri ${fmt(j.lvlr, 2)}°.`, "ok");
     send("GET"); return;
@@ -1202,6 +1254,8 @@ function renderDiag() {
     ["Suhu chip", fmt(s.temp) + " °C"], ["WiFi", (s.rssi ? "sinyal " + s.rssi + " dBm, " : "") + (s.clients || 0) + " perangkat terhubung"],
     ["Memori bebas", Math.round(s.heap / 1024) + " kB"],
   ];
+  if (s.stride !== undefined) rows.push(["Irama langkah", s.sway >= 0.5 ? `${fmt(s.stride * 2, 2)} langkah per detik, ayunan kanan-kiri ${fmt(s.sway)}°, koreksi pola ${signed(s.gaitp)}°` : "belum terbaca (sedang tidak berjalan)"]);
+  if (s.cpu) rows.push(["Waktu hitung per siklus", `${s.cpu} µs rata-rata, ${s.cpumax} µs paling lama, dari 5000 µs`, s.cpumax > 4000 ? "warn" : ""]);
   $("#diagKv").innerHTML = rows.map(([k, v, c]) => `<dt>${k}</dt><dd class="${c || ""}">${v}</dd>`).join("");
 }
 function addEvent(t, text, live) {

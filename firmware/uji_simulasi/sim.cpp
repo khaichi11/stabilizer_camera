@@ -10,6 +10,7 @@
 #include "esp_system.h"
 #include "esp_random.h"
 #include <random>
+#include <algorithm>
 #include <functional>
 #include <map>
 
@@ -63,10 +64,12 @@ static uint8_t regs[128];  // MPU6050 registers written by the firmware
 static uint32_t ledcHz = 50;  // servo pulses per second, as the firmware set the LEDC
 
 static double envd(const char *k, double d) { const char *v = getenv(k); return v ? atof(v) : d; }
-// MG90S-like analog servo. It only reads a new pulse once per 20 ms frame (the LEDC duty takes effect at the
-// next period and the servo measures the pulse while it arrives), ignores changes inside its dead band,
-// follows with a lag and has a top speed. Defaults can be changed with SRV_TAU (ms), SRV_DB (us),
-// SRV_VMAX (deg/s), BACKLASH (deg), SRV_LATCH=0 (servo sees every write at once).
+// The servo bought for this gimbal: "MG90S Micro Servo compatible" (brand as in stock), 0.11 s/60 deg at
+// 4.8 V (545 deg/s), 2.2 kg.cm, dead band width 10 us. Analog: it only reads a new pulse once per frame
+// (the LEDC duty takes effect at the next period and the servo measures the pulse while it arrives), does
+// nothing while the pulse is within half the dead band of its own position, follows with a lag and has a
+// top speed. Change with SRV_DB (us, full width), SRV_TAU (ms), SRV_VMAX (deg/s), BACKLASH (deg),
+// SRV_LATCH=0 (servo sees every write at once).
 struct Servo {
   double ang = 0;      // deg, output shaft (after backlash)
   double motor = 0;    // deg, motor side
@@ -77,9 +80,9 @@ struct Servo {
     if (pulse <= 0) return;
     double tgt = (pulse - 1500.0) / usPerDeg;
     double err = tgt - motor;
-    if (fabs(err) > envd("SRV_DB", 8.0) / usPerDeg) {  // dead band
+    if (fabs(err) > 0.5 * envd("SRV_DB", 10.0) / usPerDeg) {  // dead band
       double v = err / (envd("SRV_TAU", 25.0) * 1e-3);   // lag
-      double vmax = envd("SRV_VMAX", 500.0);
+      double vmax = envd("SRV_VMAX", 545.0);
       v = std::max(-vmax, std::min(vmax, v));
       motor += v * dt;
     }
@@ -227,7 +230,7 @@ uint8_t TwoWire::requestFrom(int address, int size) {
     for (int i = 0; i < 3; i++) fw[i] = up[i] + W.accLin[i];
     for (int k = 0; k < 3; k++) {  // specific force in IMU frame = Rimu^T * f
       double v = W.Rimu[0][k] * fw[0] + W.Rimu[1][k] * fw[1] + W.Rimu[2][k] * fw[2];
-      put16(rBuf, (v + 0.004 * nd(rng)) * 8192.0);
+      put16(rBuf, (v + 0.004 * nd(rng)) * (16384 >> ((regs[0x1C] >> 3) & 3)));  // LSB per g from ACCEL_CONFIG
     }
     put16(rBuf, 0);  // temperature
     for (int k = 0; k < 3; k++) put16(rBuf, (W.omega[k] + W.gyroBias[k] + 0.05 * nd(rng)) * 65.5);
@@ -394,7 +397,7 @@ int main() {
 
   printf("== CAL auto (cables swapped on purpose, IMU chip-down, pitch servo reversed)\n");
   usb("CAL auto");
-  run(16.0);
+  run(24.0);
   o = takeUsb();
   show(o, "CAL");
   show(o, "EV");
@@ -405,7 +408,9 @@ int main() {
   check(cfg.swapServo == 1, "swapped servo cables detected");
   check(cfg.dirP == -1 && cfg.dirR == 1, "servo directions");
   printf("   usdeg p %.2f (true %.2f)  r %.2f (true %.2f)\n", cfg.usDegP, W.pitchS.usPerDeg, cfg.usDegR, W.rollS.usPerDeg);
-  check(fabs(cfg.usDegP - W.pitchS.usPerDeg) < 0.8 && fabs(cfg.usDegR - W.rollS.usPerDeg) < 0.8, "servo scale within 0.8 us/deg");
+  check(fabs(cfg.usDegP - W.pitchS.usPerDeg) < 0.5 && fabs(cfg.usDegR - W.rollS.usPerDeg) < 0.5, "servo scale within 0.5 us/deg");
+  printf("   dead band measured: %.1f us (true %.1f, plus gear play)\n", cfg.srvDb, envd("SRV_DB", 10.0));
+  if (!getenv("BACKLASH")) check(fabs(cfg.srvDb - envd("SRV_DB", 10.0)) < 2.5 && fabs(cfg.dbComp - 0.25f * cfg.srvDb) < 0.01, "servo dead band measured within 2.5 us, compensation set from it");
   printf("   servo timing measured: delay %.1f ms, lag %.1f ms (%d/8 steps)\n", cfg.srvDelay, cfg.srvTau, cal.tCount);
   check(cal.tCount >= 6 && cfg.srvDelay >= 0 && cfg.srvDelay < 40 && cfg.srvTau > 8 && cfg.srvTau < 2.5 * envd("SRV_TAU", 25.0), "servo delay and lag measured");
   printf("   bias %.2f %.2f %.2f (true %.2f %.2f %.2f)\n", cfg.bias[0], cfg.bias[1], cfg.bias[2], W.gyroBias[0], W.gyroBias[1], W.gyroBias[2]);
@@ -426,7 +431,7 @@ int main() {
   run(2.5);
   show(takeUsb(), "CAL");
   {
-    const char *keys[] = {"kp", "gain", "ff", "smooth", "db", "acctau", "ffb", "pred", "sdelay", "stau", "sdb", "dbcomp", "acctauw", "dlpf", "pwmhz"};
+    const char *keys[] = {"kp", "gain", "ff", "smooth", "db", "acctau", "ffb", "pred", "sdelay", "stau", "sdb", "dbcomp", "acctauw", "dlpf", "pwmhz", "gait"};
     for (auto k : keys) {
       std::string env = k; for (auto &c : env) c = toupper(c);
       if (getenv(env.c_str())) { std::string c = std::string("SET ") + k + " " + getenv(env.c_str()); usb(c.c_str()); }
@@ -450,41 +455,108 @@ int main() {
     w.accLin[2] = 0.3 * sin(2 * M_PI * 3.6 * t);
     w.accLin[1] = 0.12 * sin(2 * M_PI * 1.8 * t + 0.4);
   };
+  // Walking at the belt. Step timing varies a little from step to step like real walking (GAIT_JIT, default
+  // 2 % step-rate variation), so a learned step rhythm is never exact.
+  //  jalan:  left-right at the stride (0.9 Hz), nod at every step (1.8 Hz), heel-strike jolt at each step,
+  //          hip turning, forward/side accelerations, a little random wobble
+  //  tangga: ordinary walking, then up stairs 2 s into the measurement: slower stride, each step lifts the
+  //          leg high and the right leg more than the left (bigger nod and heel strike on that side), wider
+  //          left-right sway
+  static const double WARM = envd("WARM", 10.0);  // s of walking before measuring (the rhythm is learned)
+  struct Gaitgen {  // step clock with step-to-step variation
+    double lastT = -1, cyc = 0, fj = 0;
+    double step(double t, double f) {  // f = steps per second; returns steps taken
+      double d = (lastT < 0 || t < lastT) ? 0 : t - lastT;
+      if (lastT < 0 || t < lastT) cyc = fj = 0;
+      lastT = t;
+      static const double jit = envd("GAIT_JIT", 0.02);
+      fj += -fj * d / 0.6 + jit * sqrt(2 * d / 0.6) * nd(rng);
+      cyc += f * (1 + fj) * d;
+      return cyc;
+    }
+  };
+  // ~0.2 deg of random wobble. Filtered twice so it is smooth like a body (filtered once, its rate would
+  // be white noise and look like violent vibration)
+  struct Wobble {
+    double f1 = 0, s1 = 0, f = 0, s = 0;
+    void step() {
+      f1 += (7.0 * nd(rng) - f1) * 0.005;
+      s1 += (7.0 * nd(rng) - s1) * 0.005;
+      f += (f1 - f) * 0.005;
+      s += (s1 - s) * 0.005;
+    }
+  };
   auto jalan = [](double t, World &w) {
-    // ~0.2 deg of random wobble. Filtered twice so it is smooth like a body (filtered once, its rate
-    // would be white noise and look like violent vibration)
-    static double nF1 = 0, nS1 = 0, nF = 0, nS = 0;
-    nF1 += (7.0 * nd(rng) - nF1) * 0.005;
-    nS1 += (7.0 * nd(rng) - nS1) * 0.005;
-    nF += (nF1 - nF) * 0.005;
-    nS += (nS1 - nS) * 0.005;
-    const double fs = 0.9, f2 = 1.8;
+    static Gaitgen gg;
+    static Wobble wb;
+    wb.step();
+    // WALK_F = steps per second (1.8 walk, 2.2 brisk, 2.8 jog), WALK_AMP scales the sway and the
+    // accelerations, HEEL scales the heel strike
+    static const double f2 = envd("WALK_F", 1.8), amp = envd("WALK_AMP", 1.0), hs = envd("HEEL", 1.0);
+    double cyc = gg.step(t, f2), th2 = 2 * M_PI * cyc, th1 = th2 / 2;  // step and stride angles
     double ramp = std::min(1.0, std::max(0.0, (t - 30.0) / 2.0));
-    double ph = fmod(t * f2, 1.0), wd = 0.06 * f2;  // heel strike: 60 ms bump after each step
+    double ph = fmod(cyc, 1.0), wd = 0.06 * f2;  // heel strike: 60 ms bump after each step
     double heel = ph < wd ? 0.5 - 0.5 * cos(2 * M_PI * ph / wd) : 0;
-    w.leanS = 10 * ramp + 3.5 * sin(2 * M_PI * fs * t) + 0.8 * sin(2 * M_PI * f2 * t + 0.7) + nS;
-    w.leanF = 8 * ramp + 2.0 * sin(2 * M_PI * f2 * t + 1.0) + 0.6 * sin(2 * M_PI * 2 * f2 * t + 0.3) + 0.8 * heel + nF;
-    w.yaw = getenv("J_NOYAW") ? 0 : 5 * sin(2 * M_PI * fs * t);
     if (getenv("J_NOHEEL")) heel = 0;
-    w.accLin[2] = 0.22 * sin(2 * M_PI * f2 * t) + 0.08 * sin(2 * M_PI * 2 * f2 * t) + 0.5 * heel;
-    w.accLin[1] = 0.15 * sin(2 * M_PI * f2 * t + 0.4);
-    w.accLin[0] = 0.08 * sin(2 * M_PI * fs * t + 0.2);
+    w.leanS = 10 * ramp + amp * (3.5 * sin(th1) + 0.8 * sin(th2 + 0.7)) + wb.s;
+    w.leanF = 8 * ramp + amp * (2.0 * sin(th2 + 1.0) + 0.6 * sin(2 * th2 + 0.3)) + hs * 0.8 * heel + wb.f;
+    w.yaw = getenv("J_NOYAW") ? 0 : 5 * sin(th1);
+    w.accLin[2] = amp * (0.22 * sin(th2) + 0.08 * sin(2 * th2)) + hs * 0.5 * heel;
+    w.accLin[1] = amp * 0.15 * sin(th2 + 0.4);
+    w.accLin[0] = amp * 0.08 * sin(th1 + 0.2);
     if (getenv("J_NOACC")) w.accLin[0] = w.accLin[1] = w.accLin[2] = 0;
     if (getenv("J_NOLEAN")) { w.leanS -= 10 * ramp; w.leanF -= 8 * ramp; }
   };
-  struct WalkRes { Stat sp, sr, cp, cr, ep, er, vp, vr, vcp, vcr; };
+  auto tangga = [](double t, World &w) {
+    static Gaitgen gg;
+    static Wobble wb;
+    wb.step();
+    double st = std::min(1.0, std::max(0.0, t - (32.0 + WARM)));  // 0 = flat, 1 = stairs
+    double cyc = gg.step(t, 2 * (0.9 - 0.2 * st)) / 2;             // strides
+    double th = 2 * M_PI * cyc, ph = fmod(cyc, 1.0);
+    auto bump = [&](double c, double wd) {  // raised-cosine bump at stride phase c, wd wide (phase units)
+      double d = fmod(ph - c + 1.5, 1.0) - 0.5;
+      return fabs(d) < wd / 2 ? 0.5 + 0.5 * cos(2 * M_PI * d / wd) : 0.0;
+    };
+    double wd = 0.06 * 2 * (0.9 - 0.2 * st);  // 60 ms
+    double hR = bump(0.0, wd), hL = bump(0.5, wd);
+    double ramp = std::min(1.0, std::max(0.0, (t - 30.0) / 2.0));
+    double pF = 2.0 * sin(2 * th + 1.0) + 0.6 * sin(4 * th + 0.3) + 0.8 * (hR + hL);
+    double pS = 3.5 * sin(2 * th + 1.0) + 1.2 * sin(th + 0.4) + 2.0 * hR + 1.0 * hL;
+    double rF = 3.5 * sin(th) + 0.8 * sin(2 * th + 0.7);
+    double rS = 5.0 * sin(th) + 1.5 * sin(2 * th + 0.7) + 1.5 * sin(3 * th + 0.2);
+    w.leanS = 10 * ramp + (1 - st) * rF + st * rS + wb.s;
+    w.leanF = 8 * ramp + (1 - st) * pF + st * pS + wb.f;
+    w.yaw = 5 * sin(th);
+    w.accLin[2] = (0.22 + 0.13 * st) * sin(2 * th) + (0.5 + 0.1 * st) * hR + (0.5 - 0.1 * st) * hL;
+    w.accLin[1] = 0.15 * sin(2 * th + 0.4);
+    w.accLin[0] = 0.08 * sin(th + 0.2);
+  };
+  struct WalkRes { Stat sp, sr, cp, cr, ep, er, vp, vr, vcp, vcr; std::vector<double> jp, jr, jcp, jcr; double stride = 0, sway = 0; };
+  // jolt: how far the camera jumps within 30 ms, 99th percentile (what a viewer sees as a jerk)
+  auto p99 = [](std::vector<double> v) {
+    if (v.empty()) return 0.0;
+    std::sort(v.begin(), v.end());
+    return v[(size_t)(0.99 * (v.size() - 1))];
+  };
   Stat *estP = nullptr, *estR = nullptr;  // how wrong the IMU estimate is (measured - true)
   // fast shake = camera turning rate after removing what is slower than ~5 Hz (what blurs a video frame
   // and makes rolling-shutter jello); sampled every 1 ms
-  auto measure = [&](Stat &a, Stat &b, double secs, Stat *va = nullptr, Stat *vb = nullptr) {
+  auto measure = [&](Stat &a, Stat &b, double secs, Stat *va = nullptr, Stat *vb = nullptr, std::vector<double> *ja = nullptr,
+                     std::vector<double> *jb = nullptr) {
     uint64_t last = 0, lastV = 0;
     double sx = 0, sy = 0, px = 0, py = 0;
+    double ringX[30], ringY[30];
+    int ri = 0, rn = 0;
     bool first = true;
     run(secs, [&]() {
       if (va && t_us - lastV >= 1000) {
         lastV = t_us;
         double x, y;
         truth(x, y);
+        // DUMP=file: camera angles, servo angles, servo pulses and body lean every 1 ms while measuring
+        static FILE *dump = getenv("DUMP") ? fopen(getenv("DUMP"), "w") : nullptr;
+        if (dump) fprintf(dump, "%.4f %.4f %.4f %.3f %.3f %.2f %.2f %.3f %.3f\n", t_us * 1e-6, x, y, W.pitchS.ang, W.rollS.ang, W.pitchS.pulse, W.rollS.pulse, W.leanF, W.leanS);
         if (first) { sx = x; sy = y; first = false; }
         const double k = 1.0 - exp(-0.001 / 0.032);  // 5 Hz high-pass
         sx += (x - sx) * k;
@@ -492,6 +564,14 @@ int main() {
         double hx = x - sx, hy = y - sy;
         va->add((hx - px) / 0.001);
         vb->add((hy - py) / 0.001);
+        if (ja && rn == 30) {
+          ja->push_back(fabs(x - ringX[ri]));
+          jb->push_back(fabs(y - ringY[ri]));
+        }
+        ringX[ri] = x;
+        ringY[ri] = y;
+        ri = (ri + 1) % 30;
+        if (rn < 30) rn++;
         px = hx;
         py = hy;
       }
@@ -509,13 +589,15 @@ int main() {
     WalkRes r;
     double tStart = t_us * 1e-6;
     W.body = [&](double t, World &w) { f(t - tStart + 30.0, w); };
-    run(4.0);
+    run(WARM);
     estP = &r.ep; estR = &r.er;
-    measure(r.sp, r.sr, 12.0, &r.vp, &r.vr);
+    measure(r.sp, r.sr, 12.0, &r.vp, &r.vr, &r.jp, &r.jr);
+    r.stride = gait.w / (2 * M_PI);
+    r.sway = gait.amp;
     estP = estR = nullptr;
     usb("MODE center");
     run(1.0);
-    measure(r.cp, r.cr, 12.0, &r.vcp, &r.vcr);
+    measure(r.cp, r.cr, 12.0, &r.vcp, &r.vcr, &r.jcp, &r.jcr);
     usb("MODE stab");
     run(2.0);
     W.body = nullptr;
@@ -523,21 +605,41 @@ int main() {
     W.accLin[0] = W.accLin[1] = W.accLin[2] = 0;
     run(3.0);
     takeUsb();
-    printf("   %-7s stabil: nunduk rms %.2f maks %.2f | kiri-kanan rms %.2f maks %.2f (deg)\n", name, r.sp.rms(), r.sp.mx, r.sr.rms(), r.sr.mx);
-    printf("   %-7s salah baca sensor saat stabil: nunduk rms %.2f (rata2 %+.2f) maks %.2f | kiri-kanan rms %.2f (rata2 %+.2f) maks %.2f\n", name, r.ep.rms(), r.ep.mean(), r.ep.mx, r.er.rms(), r.er.mean(), r.er.mx);
+    printf("   %-7s stabil: atas-bawah rms %.2f maks %.2f | kanan-kiri rms %.2f maks %.2f (deg)\n", name, r.sp.rms(), r.sp.mx, r.sr.rms(), r.sr.mx);
+    printf("   %-7s salah baca sensor saat stabil: atas-bawah rms %.2f (rata2 %+.2f) maks %.2f | kanan-kiri rms %.2f (rata2 %+.2f) maks %.2f\n", name, r.ep.rms(), r.ep.mean(), r.ep.mx, r.er.rms(), r.er.mean(), r.er.mx);
     printf("   %-7s getar cepat (>5 Hz, deg/s rms): stabil %.1f / %.1f, tanpa %.1f / %.1f\n", name, r.vp.rms(), r.vr.rms(), r.vcp.rms(), r.vcr.rms());
-    printf("   %-7s tanpa : nunduk rms %.2f maks %.2f | kiri-kanan rms %.2f maks %.2f (deg)\n", name, r.cp.rms(), r.cp.mx, r.cr.rms(), r.cr.mx);
+    printf("   %-7s sentakan (lompatan dalam 30 ms, persentil 99, deg): stabil %.2f / %.2f, tanpa %.2f / %.2f\n", name, p99(r.jp), p99(r.jr), p99(r.jcp), p99(r.jcr));
+    printf("   %-7s tanpa : atas-bawah rms %.2f maks %.2f | kanan-kiri rms %.2f maks %.2f (deg)\n", name, r.cp.rms(), r.cp.mx, r.cr.rms(), r.cr.mx);
+    printf("   %-7s pola langkah: %.2f langkah ganda/s, ayunan %.1f deg\n", name, r.stride, r.sway);
     return r;
   };
   printf("== walking\n");
   WalkRes wg = walkTest("goyang", goyang);
   WalkRes wj = walkTest("jalan", jalan);
+  WalkRes wt = walkTest("tangga", tangga);
   Stat sp = wj.sp, sr = wj.sr;
   check(wg.sp.rms() < wg.cp.rms() * 0.5 && wg.sr.rms() < wg.cr.rms() * 0.5, "goyang: stabilisation removes more than half the motion");
   check(wj.sp.rms() < wj.cp.rms() * 0.5 && wj.sr.rms() < wj.cr.rms() * 0.5, "jalan: stabilisation removes more than half the motion");
   check(wj.sp.rms() < 0.8 && wj.sr.rms() < 0.8, "jalan: camera within 0.8 deg rms while walking");
   check(wj.vp.rms() < 20 && wj.vr.rms() < 20, "jalan: servos add little fast shake (< 20 deg/s rms above 5 Hz)");
   check(fabs(wj.ep.mean()) < 0.3 && fabs(wj.er.mean()) < 0.3, "jalan: walking does not bias the IMU estimate (< 0.3 deg)");
+  check(p99(wj.jr) < 0.6 * p99(wj.jcr), "jalan: kanan-kiri jolts less than 60% of no gimbal");
+  check(p99(wj.jp) < 0.85 * p99(wj.jcp), "jalan: atas-bawah jolt at each step below 85% of no gimbal");
+  check(wt.sp.rms() < 0.8 && wt.sr.rms() < 0.8, "tangga: camera within 0.8 deg rms on stairs with uneven left/right steps");
+  check(p99(wt.jp) < 0.6 * p99(wt.jcp) && p99(wt.jr) < 0.6 * p99(wt.jcr), "tangga: jolts less than 60% of no gimbal");
+  // the same walk without the learned step pattern: the pattern must make the step jolt clearly smaller
+  if (cfg.gait > 0) {
+    float g0 = cfg.gait;
+    usb("SET gait 0");
+    WalkRes wn = walkTest("tanpa pola", jalan);
+    char cmd[32];
+    snprintf(cmd, sizeof cmd, "SET gait %.2f", g0);
+    usb(cmd);
+    run(0.2);
+    takeUsb();
+    printf("   pola langkah: sentakan atas-bawah %.2f -> %.2f deg (%.0f%% lebih kecil)\n", p99(wn.jp), p99(wj.jp), 100 * (1 - p99(wj.jp) / p99(wn.jp)));
+    check(p99(wj.jp) < 0.9 * p99(wn.jp) && wj.sp.rms() < wn.sp.rms() + 0.05, "jalan: learned step pattern makes the step jolt at least 10% smaller, no worse on average");
+  }
   W.body = nullptr;
   W.leanF = W.leanS = W.yaw = 0;
   W.accLin[0] = W.accLin[1] = W.accLin[2] = 0;
@@ -584,8 +686,9 @@ int main() {
     }
     printf("   within 1 deg after %.0f ms, overshoot %.0f%%, off by %.2f deg after 1.4 s\n", tIn * 1000, (peak - 1) * 100, endErr);
     riseMs = tIn * 1000; overPct = (peak - 1) * 100;
-    printf("SUMMARY | goyang rms p %.2f r %.2f | jalan rms p %.2f r %.2f max p %.2f r %.2f | reach %.0f ms over %.0f%% | jitter %.2f %.2f us | getar %.1f %.1f (tanpa %.1f %.1f)\n",
-      wg.sp.rms(), wg.sr.rms(), sp.rms(), sr.rms(), sp.mx, sr.mx, riseMs, overPct, jitP, jitR, wj.vp.rms(), wj.vr.rms(), wj.vcp.rms(), wj.vcr.rms());
+    printf("SUMMARY | goyang rms p %.2f r %.2f | jalan rms p %.2f r %.2f max p %.2f r %.2f | reach %.0f ms over %.0f%% | jitter %.2f %.2f us | getar %.1f %.1f (tanpa %.1f %.1f) | sentak %.2f %.2f (tanpa %.2f %.2f) | tangga rms %.2f %.2f sentak %.2f %.2f\n",
+      wg.sp.rms(), wg.sr.rms(), sp.rms(), sr.rms(), sp.mx, sr.mx, riseMs, overPct, jitP, jitR, wj.vp.rms(), wj.vr.rms(), wj.vcp.rms(), wj.vcr.rms(),
+      p99(wj.jp), p99(wj.jr), p99(wj.jcp), p99(wj.jcr), wt.sp.rms(), wt.sr.rms(), p99(wt.jp), p99(wt.jr));
     if (getenv("QUICK")) return 0;
     check(tIn > 0 && tIn < 0.3 && peak < 1.25 && endErr < 0.5, "step: within 1 deg in 0.3 s, overshoot < 25%, settles within 0.5 deg");
   }
@@ -755,11 +858,28 @@ int main() {
     o.crc = crc32((const uint8_t *)&o, offsetof(ConfigV40, crc));
     prefs.putBytes("cfg", &o, sizeof(o));
     memset(&cfg, 0, sizeof(cfg));
-    cfgMigrated = false;
+    cfgMigrated = nullptr;
     bool ok = cfgLoad();
     check(ok && cfgMigrated && cfg.size == sizeof(Config) && cfg.usDegP == before.usDegP && cfg.swapServo == before.swapServo &&
               fabs(cfg.pitchSet - 30) < 0.01 && fabs(cfg.ffBody - 1.0f) < 1e-6 && fabs(cfg.srvTau - 25.0f) < 1e-6 && !strcmp(cfg.pin, before.pin),
           "4.0 settings kept, new settings get defaults");
+  }
+
+  printf("== upgrade: settings saved by firmware 4.1 are kept\n");
+  {
+    ConfigV41 o;
+    memset(&o, 0, sizeof(o));
+    memcpy(&o, &before, offsetof(ConfigV41, crc));  // 4.1 layout = same fields up to its crc
+    o.size = sizeof(ConfigV41);
+    o.srvTau = 31.0f;
+    o.crc = crc32((const uint8_t *)&o, offsetof(ConfigV41, crc));
+    prefs.putBytes("cfg", &o, sizeof(o));
+    memset(&cfg, 0, sizeof(cfg));
+    cfgMigrated = nullptr;
+    bool ok = cfgLoad();
+    check(ok && cfgMigrated && !strcmp(cfgMigrated, "4.1") && cfg.size == sizeof(Config) && cfg.usDegP == before.usDegP &&
+              fabs(cfg.srvTau - 31.0f) < 1e-6 && !strcmp(cfg.wifiSsid, before.wifiSsid) && fabs(cfg.gait - GAIT_DEFAULT) < 1e-6,
+          "4.1 settings kept (WiFi too), walking pattern gets its default");
   }
 
   printf("\n%s (%d failed)\n", fails ? "SOME CHECKS FAILED" : "ALL CHECKS PASSED", fails);

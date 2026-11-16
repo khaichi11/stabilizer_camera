@@ -54,7 +54,7 @@
 #include "esp_random.h"
 #include "web_files.h"
 
-#define FW_VERSION "4.1"
+#define FW_VERSION "4.2"
 
 // ------------------------------------------------------------------------------------ pins
 static const int PIN_SDA = 6, PIN_SCL = 7;
@@ -68,12 +68,15 @@ static const float CAL_DUS = 150.0f;   // auto-calibration servo move (us), abou
 static const float TIME_DUS = 60.0f;   // auto-calibration timing steps (us), about 5 degrees
 static const int TIME_STEPS = 4;       // per servo: up, down, up, down
 static const int TIME_STEP_MS = 305;   // 305 ms: each step starts 5 ms later in the 20 ms servo frame
+static const float DB_SWING = 40.0f;   // dead band test: come back to the centre from 40 us below / above
+static const int DB_STEPS = 8;         // per servo: below, centre, above, centre, twice
 static const char *DEFAULT_PIN = "123456";
 static const float PRED_DEFAULT = 1.1f;
-static const float DBCOMP_DEFAULT = 0.0f;
-static const float SRVDB_DEFAULT = 6.0f;
+static const float DBCOMP_DEFAULT = 2.5f;  // half of the half dead band: no hunting even if it is smaller
+static const float SRVDB_DEFAULT = 10.0f;  // MG90S as sold: "dead band width 10 us"
 static const uint16_t PWMHZ_DEFAULT = 100;  // fine for analog servos like MG90S; 50 if one runs hot, up to 333 for digital servos
 static const float SMOOTH_DEFAULT = 0.02f;
+static const float GAIT_DEFAULT = 1.0f;
 static const char *DEFAULT_NAME = "Gimbal D435";
 static const char *DEFAULT_AP_PASS = "gimbald435";
 static const int WS_N = 3;    // phones/tablets connected at the same time
@@ -82,9 +85,9 @@ static const int HTTP_N = 4;  // files being sent at the same time (a browser op
 enum Mode : uint8_t { MODE_STAB = 0, MODE_CENTER = 1, MODE_MANUAL = 2, MODE_OFF = 3 };
 static const char *MODE_NAMES[] = { "stab", "center", "manual", "off" };
 enum : uint8_t { TO_USB = 1 };  // destinations: bit 0 = USB, bit 1+i = web app client i
-static inline uint8_t toWs(int i) {
-  return (uint8_t)(2 << i);
-}
+// NOTE: no function may be defined above the last struct. The Arduino IDE puts its generated function
+// prototypes just before the first function in this file, and a prototype that names a struct only
+// compiles if that struct is already defined there.
 
 // ------------------------------------------------------------------------------------ configuration (flash)
 struct Config {
@@ -109,13 +112,36 @@ struct Config {
   float srvTau;    // ms: servo lag after the dead time
   float accTauW;   // s: accelerometer time constant while walking
   float dbComp;    // us: servo dead band compensation
-  float srvDb;     // us: servo dead band (it ignores changes smaller than this)
+  float srvDb;     // us: servo dead band width as in its datasheet (it stops within half of it on either side)
   uint16_t pwmHz;  // servo pulses per second
   uint8_t wifiOn;  // 0 = WiFi off (USB only)
   uint8_t pad41;
   char wifiSsid[33];  // hotspot to join (empty = only the gimbal's own WiFi)
   char wifiPass[65];
   char apPass[33];    // the gimbal's own WiFi (8..32)
+  // v4.2
+  float gait;  // 0..1: use the learned walking pattern to turn before each step (0 = straight-line only)
+  uint32_t crc;
+};
+struct ConfigV41 {  // firmware 4.1 layout, read once and upgraded
+  uint32_t magic;
+  uint16_t size;
+  uint16_t calOK;
+  float pitchSet, rollSet;
+  float kp, gain, rateFF, deadband, smooth, maxRate, accTau;
+  uint8_t dlpf, autoBias, bootGyro, nod;
+  int16_t trimP, trimR;
+  int8_t dirP, dirR, swapServo, startMode;
+  float usDegP, usDegR, limP, limR;
+  int8_t axF, axL, axU, sgF, sgL, sgU, telHz, ledOn;
+  float lvlP, lvlR;
+  float bias[3];
+  char name[24];
+  char pin[16];
+  float ffBody, pred, srvDelay, srvTau, accTauW, dbComp, srvDb;
+  uint16_t pwmHz;
+  uint8_t wifiOn, pad41;
+  char wifiSsid[33], wifiPass[65], apPass[33];
   uint32_t crc;
 };
 struct ConfigV40 {  // firmware 4.0 layout, read once and upgraded
@@ -165,6 +191,7 @@ struct Cal {
   float up[3];
   float rot[2][3], aBefore[2][3], aAfter[2][3];
   float tth, dSum, tauSum;  // auto: servo timing steps
+  float dbLo[2][3], dbHi[2][3];  // auto: gravity at the centre, reached from below / from above
   float tb[64];
   uint16_t tt[64];
   uint8_t tn, tstep, tCount;
@@ -175,6 +202,16 @@ struct Sample {
 };
 static const int CAP_N = 300;  // 3 s at 100 Hz
 static const int MDL_N = 48;   // servo model history, 240 ms at 200 Hz
+static const int GAIT_K = 12;  // stride harmonics: 12 x ~0.9 Hz reaches ~11 Hz, a heel strike's main part
+struct Gait {
+  float h1, l1, l2, l2p, thp;  // stride clock from the left-right sway
+  float w, ph, amp;            // stride rate (rad/s), phase, sway amplitude (deg)
+  float cth[GAIT_K], sth[GAIT_K], gin[GAIT_K];  // servo phase lag and 1/gain at each harmonic
+  float a[GAIT_K], b[GAIT_K];  // learned atas-bawah servo correction over one stride (degrees)
+  float u;                     // its value now
+  uint8_t tick;
+  bool on;
+};
 struct SrvModel {              // what the servo has really done by now, as the IMU will see it
   float hist[MDL_N];
   uint8_t i;
@@ -243,11 +280,15 @@ float nodOffset = 0;
 uint32_t nodUntil = 0, softStartUntil = 0;
 // housekeeping
 uint32_t lastLoopUs = 0, loopCount = 0, loopHz = 0, statT = 0, saveAt = 0, telT = 0, rebootAt = 0;
+uint32_t cpuSum = 0, cpuPeak = 0, cpuUs = 0, cpuMaxUs = 0;  // us of IMU + estimate + control per loop (average, peak)
 uint32_t bootCount = 0, brownCount = 0;
 esp_reset_reason_t rstReason;
 bool firstBoot = false;
 
 // ------------------------------------------------------------------------------------ small helpers
+static inline uint8_t toWs(int i) {  // destination bit of web app client i
+  return (uint8_t)(2 << i);
+}
 uint32_t crc32(const uint8_t *d, size_t n) {
   uint32_t c = 0xFFFFFFFF;
   for (size_t i = 0; i < n; i++) {
@@ -400,6 +441,7 @@ void cfgDefaults(Config &c, bool keepIdentity) {
   c.dbComp = DBCOMP_DEFAULT;
   c.srvDb = SRVDB_DEFAULT;
   c.pwmHz = PWMHZ_DEFAULT;
+  c.gait = GAIT_DEFAULT;
   c.wifiOn = 1;
   strcpy(c.apPass, DEFAULT_AP_PASS);
   if (keepIdentity) {  // name, PIN and WiFi stay, so "back to defaults" does not cut the connection
@@ -418,7 +460,7 @@ void cfgDefaults(Config &c, bool keepIdentity) {
   c.name[sizeof(c.name) - 1] = 0;
   c.pin[sizeof(c.pin) - 1] = 0;
 }
-bool cfgMigrated = false;
+const char *cfgMigrated = nullptr;  // firmware version the settings came from, when they were upgraded
 bool cfgLoad() {
   Config t;
   size_t len = prefs.getBytesLength("cfg");
@@ -435,7 +477,17 @@ bool cfgLoad() {
     cfgDefaults(t, false);
     memcpy(&t, &o, offsetof(ConfigV40, crc));  // same layout up to the old crc
     t.size = sizeof(Config);
-    cfgMigrated = true;
+    cfgMigrated = "4.0";
+  } else if (len == sizeof(ConfigV41)) {  // firmware 4.1: same layout up to its crc
+    ConfigV41 o;
+    prefs.getBytes("cfg", &o, sizeof(o));
+    if (o.magic != CFG_MAGIC || o.size != sizeof(ConfigV41)) return false;
+    if (o.crc != crc32((const uint8_t *)&o, offsetof(ConfigV41, crc))) return false;
+    memset(&t, 0, sizeof(t));
+    cfgDefaults(t, false);
+    memcpy(&t, &o, offsetof(ConfigV41, crc));
+    t.size = sizeof(Config);
+    cfgMigrated = "4.1";
   } else {
     return false;
   }
@@ -449,7 +501,8 @@ bool cfgLoad() {
   t.srvTau = clampf(t.srvTau, 5.0f, 120.0f);
   t.accTauW = clampf(t.accTauW, 0.3f, 10.0f);
   t.dbComp = clampf(t.dbComp, 0.0f, 10.0f);
-  t.srvDb = clampf(t.srvDb, 0.0f, 20.0f);
+  t.srvDb = clampf(t.srvDb, 0.0f, 40.0f);
+  t.gait = clampf(t.gait, 0.0f, 1.0f);
   if (t.pwmHz < 50 || t.pwmHz > 333) t.pwmHz = PWMHZ_DEFAULT;
   t.wifiSsid[sizeof(t.wifiSsid) - 1] = t.wifiPass[sizeof(t.wifiPass) - 1] = t.apPass[sizeof(t.apPass) - 1] = 0;
   if (strlen(t.apPass) < 8) strcpy(t.apPass, DEFAULT_AP_PASS);
@@ -624,7 +677,7 @@ bool mpuInit() {
   bool ok = mpuWrite(0x6B, 0x01);    // wake up, gyro PLL clock
   ok &= mpuWrite(0x1A, cfg.dlpf & 7);  // digital low-pass filter
   ok &= mpuWrite(0x1B, 0x08);         // gyro +-500 deg/s
-  ok &= mpuWrite(0x1C, 0x08);         // accel +-4 g
+  ok &= mpuWrite(0x1C, 0x10);         // accel +-8 g: heel strikes while jogging stay unclipped
   ok &= mpuWrite(0x19, 4);            // 200 Hz sample rate
   return ok;
 }
@@ -644,7 +697,7 @@ bool mpuRead() {
   for (int k = 0; k < 3; k++) {
     int16_t a = (int16_t)((b[2 * k] << 8) | b[2 * k + 1]);
     int16_t g = (int16_t)((b[8 + 2 * k] << 8) | b[9 + 2 * k]);
-    accRaw[k] = a / 8192.0f;
+    accRaw[k] = a / 4096.0f;
     gyrUncal[k] = g / 65.5f;
     gyrRaw[k] = gyrUncal[k] - cfg.bias[k];
   }
@@ -703,10 +756,11 @@ void estimate(float dt) {
   float an = sqrtf(aF * aF + aL * aL + aU * aU), dev = fabsf(an - 1.0f);
   walkLvl += (dev - walkLvl) * dt / (0.5f + dt);
   walkF = clampf((walkLvl - 0.02f) / 0.05f, 0.0f, 1.0f);
-  // accelerometer correction: still -> skip shakes (|a| far from 1 g). Walking -> take every sample with
-  // the same weight (only hard jolts above 1 g are dropped): weighting by |a| would favour one part of
-  // the step, and the forward push of that part would show up as a tilt.
-  float w = (1.0f - walkF) * clampf(1.0f - dev / 0.15f, 0.0f, 1.0f) + walkF * (dev < 1.0f ? 1.0f : 0.0f);
+  // accelerometer correction: still -> skip shakes (|a| far from 1 g). Walking -> take EVERY sample with
+  // the same weight: over whole steps the body's accelerations average to zero, but dropping or
+  // down-weighting some of them (heel strikes come at the same point of every step) leaves the forward
+  // push of the rest behind as a tilt.
+  float w = (1.0f - walkF) * clampf(1.0f - dev / 0.15f, 0.0f, 1.0f) + walkF;
   accCount++;
   if (w < 0.5f) accRejCount++;
   if (an > 0.3f && w > 0.0f) {
@@ -747,6 +801,92 @@ void estimate(float dt) {
 // lag, so "camera angle minus model" is how far the BODY is tilted, without waiting for the PID.
 SrvModel mdlP, mdlR;
 DbComp dbcP, dbcR;
+
+// ------------------------------------------------------------------------------------ walking pattern
+// At every step the body tips forward and back within a few hundredths of a second (the heel strike).
+// The servo needs about 40 ms to show a change, so it can only meet that jolt if it starts before it.
+// The jolt comes back at the same point of every stride (one left and one right step, which may differ,
+// e.g. on stairs), so the camera's remaining atas-bawah error is learned as a sum of stride harmonics on
+// a stride clock taken from the left-right sway, and the servo gets the opposite of it ahead of time
+// (adaptive feed-forward cancellation). Each harmonic is learned through the servo's own delay and lag
+// (measured by CAL auto), so the correction arrives on time. Kanan-kiri does not need it: the sway is
+// smooth and the straight-line prediction already follows it. Only while walking with a clear sway; it
+// fades out when the walking stops and is kept for the next walk.
+Gait gait;
+static float wrapPi(float a) {
+  while (a > (float)M_PI) a -= 2.0f * (float)M_PI;
+  while (a < -(float)M_PI) a += 2.0f * (float)M_PI;
+  return a;
+}
+void gaitReset() {
+  memset(&gait, 0, sizeof(gait));
+}
+// how much later and how much smaller each harmonic shows up on the camera (servo delay, lag, smoothing)
+static void gaitServoPhase(Gait &g) {
+  float d = cfg.srvDelay * 1e-3f, tau = cfg.srvTau * 1e-3f, sm = cfg.smooth;
+  for (int j = 0; j < GAIT_K; j++) {
+    float w = (j + 1) * g.w;
+    float th = w * d + atanf(w * tau) + atanf(w * sm);
+    g.cth[j] = cosf(th);
+    g.sth[j] = sinf(th);
+    g.gin[j] = fminf(sqrtf((1.0f + w * w * tau * tau) * (1.0f + w * w * sm * sm)), 3.0f);
+  }
+}
+// bodyRoll: left-right body sway (deg); err: atas-bawah camera error (target - measured)
+void gaitStep(float bodyRoll, float err, bool learn, float dt) {
+  Gait &g = gait;
+  const float TWO_PI_F = 2.0f * (float)M_PI;
+  if (!g.on) {
+    gaitReset();
+    g.on = true;
+    g.w = TWO_PI_F * 0.9f;
+    g.h1 = bodyRoll;
+    gaitServoPhase(g);
+  }
+  // stride clock: phase of the left-right sway, band-passed to 0.4..1.3 Hz (phase portrait). The clock
+  // follows that phase within ~1/3 s; its small wobble within each stride repeats every stride and so
+  // is simply part of the learned pattern.
+  g.h1 += (bodyRoll - g.h1) * dt / 0.4f;
+  float k = TWO_PI_F * 1.3f * dt;
+  g.l1 += (bodyRoll - g.h1 - g.l1) * k;
+  g.l2 += (g.l1 - g.l2) * k;
+  float d = (g.l2 - g.l2p) / dt;
+  g.l2p = g.l2;
+  float q = d / g.w;
+  float th = atan2f(g.l2, q);
+  float dth = wrapPi(th - g.thp);
+  g.thp = th;
+  g.amp += (sqrtf(g.l2 * g.l2 + q * q) - g.amp) * dt / 0.5f;
+  g.w += (clampf(dth / dt, TWO_PI_F * 0.4f, TWO_PI_F * 1.8f) - g.w) * dt / 1.0f;
+  g.ph = wrapPi(g.ph + g.w * dt + 3.0f * dt * wrapPi(th - g.ph));
+  if (++g.tick >= 10) {  // every 50 ms is enough: the stride rate changes slowly
+    g.tick = 0;
+    gaitServoPhase(g);
+  }
+  // harmonics of the phase (angle-addition recurrence: one sin/cos per step)
+  float sk[GAIT_K], ck[GAIT_K];
+  float s1 = sinf(g.ph), c1 = cosf(g.ph);
+  sk[0] = s1, ck[0] = c1;
+  for (int j = 1; j < GAIT_K; j++) {
+    sk[j] = sk[j - 1] * c1 + ck[j - 1] * s1;
+    ck[j] = ck[j - 1] * c1 - sk[j - 1] * s1;
+  }
+  float u = 0;
+  for (int j = 0; j < GAIT_K; j++) u += g.a[j] * sk[j] + g.b[j] * ck[j];
+  g.u = u;
+  if (!learn || g.amp < 0.5f) return;  // no clear left-right sway: the clock cannot be trusted
+  const float gam = 0.005f, leak = 1.0f - 0.03f * dt;  // learns in ~2 s, forgets an old pattern in ~30 s
+  for (int j = 0; j < GAIT_K; j++) {
+    // the harmonic as the camera will see it: delayed by the servo's phase lag
+    float sd = sk[j] * g.cth[j] - ck[j] * g.sth[j], cd = ck[j] * g.cth[j] + sk[j] * g.sth[j];
+    float e = gam * g.gin[j] * err;
+    g.a[j] = clampf(g.a[j] * leak + e * sd, -6.0f, 6.0f);
+    g.b[j] = clampf(g.b[j] * leak + e * cd, -6.0f, 6.0f);
+  }
+}
+float gaitAdd() {
+  return cfg.gait * walkF * fminf(gait.amp / 0.8f, 1.0f) * gait.u;
+}
 void srvModelReset(SrvModel &s, float v) {
   for (int k = 0; k < MDL_N; k++) s.hist[k] = v;
   s.i = 0;
@@ -764,7 +904,7 @@ void srvModelStep(SrvModel &s, float out, float usDeg, float dt) {
   float k = 1.0f - expf(-dt / fmaxf(cfg.srvTau * 1e-3f, 0.002f));
   // like the servo, the model stays put for small changes and stops at the edge of the dead band
   // (minus what dbComp already makes up for)
-  float db = fmaxf(cfg.srvDb - cfg.dbComp, 0.0f) / fmaxf(usDeg, 1.0f);
+  float db = fmaxf(0.5f * cfg.srvDb - cfg.dbComp, 0.0f) / fmaxf(usDeg, 1.0f);
   float err = delayed - s.m, prev = s.m;
   if (fabsf(err) > db) s.m += (err - copysignf(db, err)) * k;
   s.rate = (s.m - prev) / dt;
@@ -780,7 +920,7 @@ void controlReset() {
 // direction it was moving. Adding the dead band in that direction lets it stop on the command.
 // The direction only flips after a 1 us reversal, so noise cannot make it rattle.
 float dbCompApply(DbComp &c, float us) {
-  if (cfg.dbComp <= 0) {
+  if (cfg.dbComp <= 0 || mode != MODE_STAB) {  // centre / manual / off: exactly the pulse asked for
     c.pk = us;
     c.sg = 0;
     return us;
@@ -846,8 +986,17 @@ void axesString(char *out, int8_t aF, int8_t sF, int8_t aL, int8_t sL, int8_t aU
 // 1) gyro bias + gravity direction, 2) each servo moves +150 us and back: gyro gives the rotation axis,
 // accelerometer gives the angle. Result: IMU axis mapping, servo cables swapped or not, direction and
 // microseconds per degree of each servo. 3) four quick 60 us steps per servo: how long until the camera
-// starts to turn (delay) and how fast it gets there (lag), for the servo model.
-enum { AP_SETTLE = 0, AP_GYRO, AP_BEFORE, AP_OUT, AP_HOLD, AP_BACK, AP_TIME };
+// starts to turn (delay) and how fast it gets there (lag), for the servo model. 4) each servo comes back
+// to the centre from below and from above, twice: it stops short of the centre on the side it came from,
+// so the two resting angles differ by its dead band (plus any gear play). Every servo sold as "MG90S" is
+// a little different, so this is measured rather than taken from the listing.
+enum { AP_SETTLE = 0, AP_GYRO, AP_BEFORE, AP_OUT, AP_HOLD, AP_BACK, AP_TIME, AP_DB };
+void calDbStart(uint8_t step) {
+  calPhase(AP_DB);
+  cal.tstep = step;
+  float *mv = (cal.servo == 0) ? &cal.usA : &cal.usB;
+  *mv = (step % 2) ? 0.0f : ((step % 4 == 0) ? -DB_SWING : DB_SWING);
+}
 void calTimeStart(uint8_t step) {
   calPhase(AP_TIME);
   cal.tstep = step;
@@ -949,15 +1098,22 @@ void calAutoSolve() {
   cfg.sgF = sF;
   cfg.sgL = sL;
   cfg.sgU = sU;
-  float th0, ph0, th1, ph1, th2, ph2, th3, ph3;
-  accAngles(cal.aBefore[pitchS], th0, ph0);
+  // A servo stops at the edge of its dead band, on the side it came from. The +150 us position and the
+  // centre reached from below were both approached from below, so they are exactly 150 us apart.
+  float th0, ph0, th1, ph1, th2, ph2, th3, ph3, thH, phH, thL, phL;
+  accAngles(cal.dbLo[pitchS], th0, ph0);
   accAngles(cal.aAfter[pitchS], th1, ph1);
-  accAngles(cal.aBefore[rollS], th2, ph2);
+  accAngles(cal.dbLo[rollS], th2, ph2);
   accAngles(cal.aAfter[rollS], th3, ph3);
   float dTh = th1 - th0, dPh = wrap180(ph3 - ph2);
-  // a servo stops at the edge of its dead band, short of the command by about that much
-  float moved = CAL_DUS - cfg.srvDb;
-  float usDegP = moved / fmaxf(fabsf(dTh), 0.01f), usDegR = moved / fmaxf(fabsf(dPh), 0.01f);
+  float usDegP = CAL_DUS / fmaxf(fabsf(dTh), 0.01f), usDegR = CAL_DUS / fmaxf(fabsf(dPh), 0.01f);
+  // the centre reached from above minus from below = the dead band
+  accAngles(cal.dbHi[pitchS], thH, phH);
+  accAngles(cal.dbLo[pitchS], thL, phL);
+  float dbP = fabsf(thH - thL) * usDegP;
+  accAngles(cal.dbHi[rollS], thH, phH);
+  accAngles(cal.dbLo[rollS], thL, phL);
+  float dbR = fabsf(wrap180(phH - phL)) * usDegR;
   if (usDegP < 6.0f || usDegP > 16.0f || usDegR < 6.0f || usDegR > 16.0f) {
     cfg.axF = oF;
     cfg.axL = oL;
@@ -981,6 +1137,11 @@ void calAutoSolve() {
   cfg.dirR = dPh > 0 ? 1 : -1;
   cfg.usDegP = usDegP;
   cfg.usDegR = usDegR;
+  bool dbOk = dbP < 40.0f && dbR < 40.0f;
+  if (dbOk) {
+    cfg.srvDb = clampf(0.5f * (dbP + dbR), 1.0f, 40.0f);
+    cfg.dbComp = 0.25f * cfg.srvDb;  // half of what the servo stops short: never more than it really does
+  }
   bool timed = cal.tCount >= TIME_STEPS;  // at least half of the 8 steps readable
   if (timed) {
     cfg.srvDelay = clampf(cal.dSum / cal.tCount, 0.0f, 60.0f);
@@ -1001,13 +1162,16 @@ void calAutoSolve() {
   sendf(allDest() | cal.src,
         "CAL DONE auto {\"axes\":\"%s\",\"swap\":%d,\"dirp\":%d,\"dirr\":%d,\"usdegp\":%.2f,\"usdegr\":%.2f,"
         "\"gyrop\":%.1f,\"gyror\":%.1f,\"accp\":%.1f,\"accr\":%.1f,\"align\":%.2f,\"bias\":[%.2f,%.2f,%.2f],\"levelreset\":%d,"
-        "\"sdelay\":%.1f,\"stau\":%.1f,\"tsteps\":%d}",
+        "\"sdelay\":%.1f,\"stau\":%.1f,\"tsteps\":%d,\"sdbp\":%.1f,\"sdbr\":%.1f,\"sdb\":%.1f,\"dbcomp\":%.1f}",
         ax, cfg.swapServo, cfg.dirP, cfg.dirR, cfg.usDegP, cfg.usDegR, m[pitchS], m[rollS], dTh, dPh, pitchAlign,
-        cfg.bias[0], cfg.bias[1], cfg.bias[2], mapChanged ? 1 : 0, cfg.srvDelay, cfg.srvTau, cal.tCount);
+        cfg.bias[0], cfg.bias[1], cfg.bias[2], mapChanged ? 1 : 0, cfg.srvDelay, cfg.srvTau, cal.tCount, dbP, dbR, cfg.srvDb,
+        cfg.dbComp);
   event("Kalibrasi otomatis selesai: sumbu %s, kabel servo %s, %.1f/%.1f us per derajat", ax, cfg.swapServo ? "tertukar (sudah dikompensasi)" : "benar",
         cfg.usDegP, cfg.usDegR);
   if (timed) event("Kecepatan servo: jeda %.0f ms, waktu tanggap %.0f ms", cfg.srvDelay, cfg.srvTau);
   else event("Kecepatan servo tidak terukur jelas (%d/8 langkah); memakai %.0f/%.0f ms", cal.tCount, cfg.srvDelay, cfg.srvTau);
+  if (dbOk) event("Zona mati servo: atas-bawah %.0f us, kanan-kiri %.0f us (dipakai %.0f us)", dbP, dbR, cfg.srvDb);
+  else event("Zona mati servo tidak terukur jelas; memakai %.0f us", cfg.srvDb);
   cal.kind = CAL_IDLE;
 }
 
@@ -1170,6 +1334,28 @@ void calUpdate(float dt) {
           cal.servo = 1;
           calTimeStart(0);
         } else {
+          cal.servo = 0;
+          memset(cal.dbLo, 0, sizeof(cal.dbLo));
+          memset(cal.dbHi, 0, sizeof(cal.dbHi));
+          sendf(allDest() | cal.src, "CAL STEP deadband");
+          calDbStart(0);
+        }
+      }
+      break;
+    }
+    case AP_DB: {  // swing 250 ms; back at the centre: settle 300 ms, average gravity 300 ms
+      bool atCentre = cal.tstep % 2;
+      if (atCentre && el >= 300) {
+        float(*dst)[3] = (cal.tstep % 4 == 1) ? cal.dbLo : cal.dbHi;
+        for (int k = 0; k < 3; k++) dst[cal.servo][k] += accRaw[k];
+      }
+      if (el >= (atCentre ? 600u : 250u)) {
+        if (cal.tstep + 1 < DB_STEPS) {
+          calDbStart(cal.tstep + 1);
+        } else if (cal.servo == 0) {
+          cal.servo = 1;
+          calDbStart(0);
+        } else {
           calAutoSolve();
         }
       }
@@ -1271,8 +1457,10 @@ void control(float dt) {
     float lead = cfg.pred * (cfg.srvDelay + cfg.srvTau + cfg.smooth * 1000.0f) * 1e-3f;
     float bodyP = pitchMeas - mdlP.m, bodyR = rollMeas - mdlR.m;
     float bRateP = pitchRate - mdlP.rate, bRateR = rollRate - mdlR.rate;
-    ffP = cfg.ffBody * (spP - bodyP - lead * bRateP);
-    ffR = cfg.ffBody * (spR - bodyR - lead * bRateR);
+    float lin[2] = {bodyP + lead * bRateP, bodyR + lead * bRateR};
+    gaitStep(bodyR, spP - pitchMeas, walkF > 0.5f && !satP && cfg.gait > 0, dt);
+    ffP = cfg.ffBody * (spP - lin[0]) + gaitAdd();
+    ffR = cfg.ffBody * (spR - lin[1]);
     float totP = pidStep(cmdP, eP, pitchRate, ffP, limP, dt);
     float totR = pidStep(cmdR, eR, rollRate, ffR, limR, dt);
     satP = totP >= limP || totP <= -limP;
@@ -1898,24 +2086,26 @@ void sendCfg(uint8_t dest) {
         "\"acctau\":%.2f,\"dlpf\":%u,\"autobias\":%u,\"bootgyro\":%u,\"nod\":%u,\"trimp\":%d,\"trimr\":%d,\"dirp\":%d,"
         "\"dirr\":%d,\"swap\":%d,\"usdegp\":%.2f,\"usdegr\":%.2f,\"limp\":%.1f,\"limr\":%.1f,\"lvlp\":%.2f,\"lvlr\":%.2f,"
         "\"axes\":\"%s\",\"tel\":%d,\"led\":%d,\"startmode\":%d,\"name\":\"%s\",\"cal\":%u,\"defpin\":%d,\"mode\":\"%s\","
-        "\"ffb\":%.2f,\"pred\":%.2f,\"sdelay\":%.1f,\"stau\":%.1f,\"acctauw\":%.2f,\"dbcomp\":%.1f,\"sdb\":%.1f,\"pwmhz\":%u}",
+        "\"ffb\":%.2f,\"pred\":%.2f,\"sdelay\":%.1f,\"stau\":%.1f,\"acctauw\":%.2f,\"dbcomp\":%.1f,\"sdb\":%.1f,\"pwmhz\":%u,\"gait\":%.2f}",
         cfg.pitchSet, cfg.rollSet, cfg.kp, cfg.gain, cfg.rateFF, cfg.deadband, cfg.smooth, cfg.maxRate, cfg.accTau, cfg.dlpf,
         cfg.autoBias, cfg.bootGyro, cfg.nod, cfg.trimP, cfg.trimR, cfg.dirP, cfg.dirR, cfg.swapServo, cfg.usDegP,
         cfg.usDegR, cfg.limP, cfg.limR, cfg.lvlP, cfg.lvlR, ax, cfg.telHz, cfg.ledOn, cfg.startMode, cfg.name, cfg.calOK,
         strcmp(cfg.pin, DEFAULT_PIN) == 0 ? 1 : 0, MODE_NAMES[mode], cfg.ffBody, cfg.pred, cfg.srvDelay, cfg.srvTau,
-        cfg.accTauW, cfg.dbComp, cfg.srvDb, (unsigned)cfg.pwmHz);
+        cfg.accTauW, cfg.dbComp, cfg.srvDb, (unsigned)cfg.pwmHz, cfg.gait);
 }
 void sendStatus(uint8_t dest) {
   sendf(dest,
         "ST {\"fw\":\"%s\",\"up\":%lu,\"hz\":%lu,\"rst\":\"%s\",\"boots\":%lu,\"brown\":%lu,\"imu\":%d,\"who\":\"0x%02X\","
         "\"addr\":\"0x%02X\",\"i2cerr\":%lu,\"temp\":%.1f,\"bias\":[%.2f,%.2f,%.2f],\"heap\":%lu,\"clients\":%d,\"rssi\":%d,"
         "\"mode\":\"%s\",\"cal\":\"%s\",\"still\":%d,\"accrej\":%.0f,\"usp\":%.0f,\"usr\":%.0f,\"swap\":%d,"
-        "\"walk\":%.2f,\"ffp\":%.2f,\"ffr\":%.2f,\"ip\":%.2f,\"ir\":%.2f}",
+        "\"walk\":%.2f,\"ffp\":%.2f,\"ffr\":%.2f,\"ip\":%.2f,\"ir\":%.2f,\"stride\":%.2f,\"sway\":%.1f,"
+        "\"gaitp\":%.2f,\"cpu\":%lu,\"cpumax\":%lu}",
         FW_VERSION, (unsigned long)(millis() / 1000), (unsigned long)loopHz, resetReasonStr(rstReason),
         (unsigned long)bootCount, (unsigned long)brownCount, imuOK ? 1 : 0, imuWho, imuAddr, (unsigned long)i2cErr,
         temperatureRead(), cfg.bias[0], cfg.bias[1], cfg.bias[2], (unsigned long)ESP.getFreeHeap(),
         wsCount(true), wifiRssi(), MODE_NAMES[mode], CAL_NAMES[cal.kind], isStill ? 1 : 0,
-        accRejPct, usP, usR, cfg.swapServo, walkF, ffP, ffR, cmdP, cmdR);
+        accRejPct, usP, usR, cfg.swapServo, walkF, ffP, ffR, cmdP, cmdR, gait.w / (2.0f * (float)M_PI), gait.amp,
+        gaitAdd(), (unsigned long)cpuUs, (unsigned long)cpuMaxUs);
 }
 void sendHelp(uint8_t dest) {
   static const char *lines[] = {
@@ -1923,7 +2113,7 @@ void sendHelp(uint8_t dest) {
     "HELP GET | STATUS | EVLOG | PING | HELLO",
     "HELP SET <kunci> <nilai>   (pitch roll kp gain ff db smooth maxrate acctau dlpf autobias bootgyro nod",
     "HELP     trimp trimr dirp dirr swap usdegp usdegr limp limr lvlp lvlr axes tel led startmode",
-    "HELP     ffb pred sdelay stau sdb dbcomp acctauw pwmhz)",
+    "HELP     ffb pred sdelay stau sdb dbcomp acctauw pwmhz gait)",
     "HELP MODE stab|center|manual|off   MAN <atas-bawah> <kanan-kiri>",
     "HELP CAL auto | CAL gyro | CAL level [atas-bawah|x] [kanan-kiri|x] | CAL abort",
     "HELP STEP p|r <derajat>   SAVE   DEFAULTS tuning|all   PIN <baru>   NAME <nama>   REBOOT",
@@ -1961,7 +2151,8 @@ bool setParam(const char *key, const char *val, char *err, size_t errLen) {
   F_("stau", srvTau, 5.0f, 120.0f)
   F_("acctauw", accTauW, 0.3f, 10.0f)
   F_("dbcomp", dbComp, 0.0f, 10.0f)
-  F_("sdb", srvDb, 0.0f, 20.0f)
+  F_("sdb", srvDb, 0.0f, 40.0f)
+  F_("gait", gait, 0.0f, 1.0f)
   I_("autobias", autoBias, 0, 1)
   I_("bootgyro", bootGyro, 0, 1)
   I_("nod", nod, 0, 1)
@@ -2414,7 +2605,7 @@ void setup() {
   softStartUntil = millis() + 2500;
   event("Menyala (fw %s). Penyebab mulai ulang: %s. Total mulai ulang karena tegangan turun: %lu", FW_VERSION, resetReasonStr(rstReason),
         (unsigned long)brownCount);
-  if (cfgMigrated) event("Pengaturan dari firmware 4.0 tetap dipakai; pengaturan baru diisi nilai bawaan");
+  if (cfgMigrated) event("Pengaturan dari firmware %s tetap dipakai; pengaturan baru diisi nilai bawaan", cfgMigrated);
   if (!imuOK) event("IMU tidak terbaca: periksa VCC->3V3, GND->G, SDA->GPIO6, SCL->GPIO7");
   if (!(cfg.calOK & 1)) event("Belum dikalibrasi: servo ditahan di tengah. Jalankan kalibrasi otomatis.");
   if (!cfg.wifiOn) event("WiFi nonaktif (kirim WIFI ON lewat USB untuk mengaktifkan)");
@@ -2431,6 +2622,7 @@ void loop() {
   if (dt > 0.05f) dt = 0.05f;
   lastLoopUs = nowUs;
   loopCount++;
+  uint32_t workT0 = micros();
 
   if (mpuRead()) {
     if (!imuOK) {
@@ -2460,11 +2652,17 @@ void loop() {
   calUpdate(dt);
   stepUpdate();
   control(dt);
+  uint32_t work = micros() - workT0;  // IMU read + estimate + control, the part that must fit in 5 ms
+  cpuSum += work;
+  if (work > cpuPeak) cpuPeak = work;
   ledUpdate();
   telemetry();
 
   uint32_t now = millis();
   if ((uint32_t)(now - statT) >= 1000) {
+    cpuUs = loopCount ? cpuSum / loopCount : 0;
+    cpuMaxUs = cpuPeak;
+    cpuSum = cpuPeak = 0;
     loopHz = loopCount;
     loopCount = 0;
     accRejPct = accCount ? 100.0f * accRejCount / accCount : 0;

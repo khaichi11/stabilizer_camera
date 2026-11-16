@@ -47,6 +47,6 @@ jobs:
           g++ -std=gnu++17 -O2 -Wall -Wextra -Wno-unused-parameter -I mock -include array sim.cpp -o sim
           ./sim
           echo "== other servos (summary only)"
-          for v in "SRV_TAU=15 SRV_DB=4" "SRV_TAU=40 SRV_DB=12" "SRV_TAU=60" "BACKLASH=0.6"; do
+          for v in "SRV_TAU=15 SRV_DB=6" "SRV_TAU=40 SRV_DB=20" "SRV_TAU=60" "BACKLASH=0.6" "GAIT_JIT=0.04" "WALK_F=2.8 WALK_AMP=2.5 HEEL=3" "GAIT=0"; do
             echo "$v: $(env $v QUICK=1 ./sim | grep SUMMARY)"
           done
