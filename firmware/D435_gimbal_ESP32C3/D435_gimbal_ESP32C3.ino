@@ -168,6 +168,32 @@ struct Config {
   float srvAcc;  // deg/s^2: optional servo acceleration limit (0 = off); maxRate is the speed limit
   float limPUsDn, limPUsUp;  // us from the centre pulse: atas-bawah servo position limits (camera down / up)
   float twinP, twinR;      // deg: camera pitch/roll with both servos in the centre and the body upright (3D model)
+  // 4.4b: how far the camera really turns per commanded degree (3D model only). A worn or loaded MG90S
+  // can turn the camera only 0.3..0.7x of the command; the 3D model then drew the body tilted.
+  float twinKP, twinKR;
+  uint32_t crc;
+};
+struct ConfigV44 {  // firmware 4.4 layout before the 3D model scale, read once and upgraded
+  uint32_t magic;
+  uint16_t size;
+  uint16_t calOK;
+  float pitchSet, rollSet;
+  float kp, gain, rateFF, deadband, smooth, maxRate, accTau;
+  uint8_t dlpf, autoBias, bootGyro, nod;
+  int16_t trimP, trimR;
+  int8_t dirP, dirR, swapServo, startMode;
+  float usDegP, usDegR, limP, limR;
+  int8_t axF, axL, axU, sgF, sgL, sgU, telHz, ledOn;
+  float lvlP, lvlR;
+  float bias[3];
+  char name[24];
+  char pin[16];
+  float ffBody, pred, srvDelay, srvTau, accTauW, dbComp, srvDb;
+  uint16_t pwmHz;
+  uint8_t wifiOn, ditherUs;
+  char wifiSsid[33], wifiPass[65], apPass[33];
+  float gait, soft;
+  float srvAcc, limPUsDn, limPUsUp, twinP, twinR;
   uint32_t crc;
 };
 struct ConfigV43 {  // firmware 4.3 layout, read once and upgraded
@@ -556,7 +582,9 @@ void cfgDefaults(Config &c, bool keepIdentity) {
   c.limPUsDn = LIMP_US_DEFAULT;
   c.limPUsUp = -LIMP_US_DEFAULT;
   c.twinP = 35.0f;  // the 3D model's own pose (belt use) until CAL twin measures the real one
-  c.twinR = 0.0f;  // atas-bawah: +-16 deg, the MG90S under the D435 slips its gears beyond that (4.3: 50)
+  c.twinR = 0.0f;
+  c.twinKP = 1.0f;
+  c.twinKR = 1.0f;  // atas-bawah: +-16 deg, the MG90S under the D435 slips its gears beyond that (4.3: 50)
   c.limR = 55.0f;  // kanan-kiri: a 50 deg lean is still corrected, with a little to spare (v4.2: 25)
   c.axF = 0;
   c.axL = 1;
@@ -647,11 +675,21 @@ bool cfgLoad() {
     memcpy(&t, &o, offsetof(ConfigV43, crc));
     t.size = sizeof(Config);
     cfgMigrated = "4.3";
+  } else if (len == sizeof(ConfigV44)) {  // firmware 4.4 before the 3D model scale: same layout up to its crc
+    ConfigV44 o;
+    prefs.getBytes("cfg", &o, sizeof(o));
+    if (o.magic != CFG_MAGIC || o.size != sizeof(ConfigV44)) return false;
+    if (o.crc != crc32((const uint8_t *)&o, offsetof(ConfigV44, crc))) return false;
+    memset(&t, 0, sizeof(t));
+    cfgDefaults(t, false);
+    memcpy(&t, &o, offsetof(ConfigV44, crc));
+    t.size = sizeof(Config);
+    cfgMigrated = "4.4";
   } else {
     return false;
   }
   // 4.4: slow, gentle servos by default (older firmware ran them at up to 400 deg/s)
-  if (cfgMigrated) {
+  if (cfgMigrated && strcmp(cfgMigrated, "4.4")) {
     t.maxRate = SPEED_DEFAULT;
     t.srvAcc = ACC_DEFAULT;
   }
@@ -673,6 +711,8 @@ bool cfgLoad() {
   t.limPUsUp = clampf(t.limPUsUp, -1000.0f, 1000.0f);
   if (!(t.twinP > -90.0f && t.twinP < 90.0f)) t.twinP = 35.0f;
   if (!(t.twinR > -90.0f && t.twinR < 90.0f)) t.twinR = 0.0f;
+  if (!(t.twinKP >= 0.1f && t.twinKP <= 3.0f)) t.twinKP = 1.0f;
+  if (!(t.twinKR >= 0.1f && t.twinKR <= 3.0f)) t.twinKR = 1.0f;
   t.srvAcc = t.srvAcc <= 0.0f ? 0.0f : clampf(t.srvAcc, 200.0f, 20000.0f);
   if (t.pwmHz < 50 || t.pwmHz > 333) t.pwmHz = PWMHZ_DEFAULT;
   t.wifiSsid[sizeof(t.wifiSsid) - 1] = t.wifiPass[sizeof(t.wifiPass) - 1] = t.apPass[sizeof(t.apPass) - 1] = 0;
@@ -2418,12 +2458,12 @@ void sendCfg(uint8_t dest) {
         "\"acctau\":%.2f,\"dlpf\":%u,\"autobias\":%u,\"bootgyro\":%u,\"nod\":%u,\"trimp\":%d,\"trimr\":%d,\"dirp\":%d,"
         "\"dirr\":%d,\"swap\":%d,\"usdegp\":%.2f,\"usdegr\":%.2f,\"limp\":%.1f,\"limr\":%.1f,\"lvlp\":%.2f,\"lvlr\":%.2f,"
         "\"axes\":\"%s\",\"tel\":%d,\"led\":%d,\"startmode\":%d,\"name\":\"%s\",\"cal\":%u,\"defpin\":%d,\"mode\":\"%s\","
-        "\"ffb\":%.2f,\"pred\":%.2f,\"sdelay\":%.1f,\"stau\":%.1f,\"acctauw\":%.2f,\"dbcomp\":%.1f,\"sdb\":%.1f,\"pwmhz\":%u,\"gait\":%.2f,\"soft\":%.2f,\"srvacc\":%.0f,\"limpdn\":%.0f,\"limpup\":%.0f,\"twinp\":%.2f,\"twinr\":%.2f,\"dither\":%u}",
+        "\"ffb\":%.2f,\"pred\":%.2f,\"sdelay\":%.1f,\"stau\":%.1f,\"acctauw\":%.2f,\"dbcomp\":%.1f,\"sdb\":%.1f,\"pwmhz\":%u,\"gait\":%.2f,\"soft\":%.2f,\"srvacc\":%.0f,\"limpdn\":%.0f,\"limpup\":%.0f,\"twinp\":%.2f,\"twinr\":%.2f,\"dither\":%u,\"twinkp\":%.2f,\"twinkr\":%.2f}",
         cfg.pitchSet, cfg.rollSet, cfg.kp, cfg.gain, cfg.rateFF, cfg.deadband, cfg.smooth, cfg.maxRate, cfg.accTau, cfg.dlpf,
         cfg.autoBias, cfg.bootGyro, cfg.nod, cfg.trimP, cfg.trimR, cfg.dirP, cfg.dirR, cfg.swapServo, cfg.usDegP,
         cfg.usDegR, cfg.limP, cfg.limR, cfg.lvlP, cfg.lvlR, ax, cfg.telHz, cfg.ledOn, cfg.startMode, cfg.name, cfg.calOK,
         strcmp(cfg.pin, DEFAULT_PIN) == 0 ? 1 : 0, MODE_NAMES[mode], cfg.ffBody, cfg.pred, cfg.srvDelay, cfg.srvTau,
-        cfg.accTauW, cfg.dbComp, cfg.srvDb, (unsigned)cfg.pwmHz, cfg.gait, cfg.soft, cfg.srvAcc, cfg.limPUsDn, cfg.limPUsUp, cfg.twinP, cfg.twinR, (unsigned)cfg.ditherUs);
+        cfg.accTauW, cfg.dbComp, cfg.srvDb, (unsigned)cfg.pwmHz, cfg.gait, cfg.soft, cfg.srvAcc, cfg.limPUsDn, cfg.limPUsUp, cfg.twinP, cfg.twinR, (unsigned)cfg.ditherUs, cfg.twinKP, cfg.twinKR);
 }
 void sendStatus(uint8_t dest) {
   sendf(dest,
@@ -2445,7 +2485,7 @@ void sendHelp(uint8_t dest) {
     "HELP GET | STATUS | EVLOG | PING | HELLO",
     "HELP SET <kunci> <nilai>   (pitch roll kp gain ff db smooth maxrate acctau dlpf autobias bootgyro nod",
     "HELP     trimp trimr dirp dirr swap usdegp usdegr limp limr lvlp lvlr axes tel led startmode",
-    "HELP     ffb pred sdelay stau sdb dbcomp acctauw pwmhz gait soft srvacc limpdn limpup twinp twinr dither)",
+    "HELP     ffb pred sdelay stau sdb dbcomp acctauw pwmhz gait soft srvacc limpdn limpup twinp twinr dither twinkp twinkr)",
     "HELP MODE stab|center|manual|off   MAN <atas-bawah> <kanan-kiri>   LIMP down|up (batas = posisi Manual sekarang)",
     "HELP CAL gyro | CAL level [atas-bawah|x] [kanan-kiri|x] | CAL twin | CAL abort",
     "HELP ACC | ACC off <x> <y> <z> | ACC gain <x> <y> <z> | ACC reset",
@@ -2510,6 +2550,8 @@ bool setParam(const char *key, const char *val, char *err, size_t errLen) {
   F_("limpup", limPUsUp, -1000.0f, 1000.0f)
   F_("twinp", twinP, -89.0f, 89.0f)
   F_("twinr", twinR, -89.0f, 89.0f)
+  F_("twinkp", twinKP, 0.1f, 3.0f)
+  F_("twinkr", twinKR, 0.1f, 3.0f)
   F_("limr", limR, 3.0f, 60.0f)
   F_("lvlp", lvlP, -30.0f, 30.0f)
   F_("lvlr", lvlR, -30.0f, 30.0f)
@@ -2752,8 +2794,8 @@ void handleLine(char *line, uint8_t src) {
         sendTo(src, "CAL FAIL twin gimbal belum diam: letakkan tegak dan jangan disentuh sebentar");
         return;
       }
-      cfg.twinP = clampf(pitchMeas - outP, -89.0f, 89.0f);
-      cfg.twinR = clampf(rollMeas - outR, -89.0f, 89.0f);
+      cfg.twinP = clampf(pitchMeas - outP * cfg.twinKP, -89.0f, 89.0f);
+      cfg.twinR = clampf(rollMeas - outR * cfg.twinKR, -89.0f, 89.0f);
       cfg.calOK |= 8;
       cfgSaveSoon();
       sendf(allDest() | src, "CAL DONE twin {\"twinp\":%.2f,\"twinr\":%.2f}", cfg.twinP, cfg.twinR);
