@@ -443,7 +443,7 @@ void cfgDefaults(Config &c, bool keepIdentity) {
   memset(&c, 0, sizeof(c));
   c.magic = CFG_MAGIC;
   c.size = sizeof(Config);
-  c.pitchSet = 35.0f;
+  c.pitchSet = 0.0f;  // like a handheld stabiliser: camera straight ahead and level (v4.2: 35 deg down, belt use)
   c.rollSet = 0.0f;
   c.kp = 0.6f;
   c.gain = 10.0f;
@@ -461,7 +461,7 @@ void cfgDefaults(Config &c, bool keepIdentity) {
   c.startMode = MODE_STAB;
   c.usDegP = 10.5f;
   c.usDegR = 10.5f;
-  c.limP = 25.0f;
+  c.limP = 50.0f;  // atas-bawah may move +-50 deg to bring the camera back when the body leans (v4.2: 25)
   c.limR = 50.0f;  // kanan-kiri: full 50 deg (v4.2: 25)
   c.axF = 0;
   c.axL = 1;
@@ -1100,12 +1100,12 @@ void calAutoSolve() {
     for (int k = 0; k < 3; k++) n[s][k] = cal.rot[s][k] / m[s];
     c[s] = fabsf(vdot(n[s], cal.up));
   }
-  // roll servo turns the camera about its optical axis, which points ~35 deg down: its axis is closer to vertical
-  if (fabsf(c[1] - c[0]) < 0.1f) {  // 0.2 needed ~12 deg down, contradicting the 10 deg rule below
-    calFail("Posisi tidak jelas. Tegakkan dudukan seperti saat dipakai (kamera mengarah ke bawah), lalu ulangi.");
-    return;
-  }
-  int rollS = (c[1] >= c[0]) ? 1 : 0;
+  // Roll servo turns the camera about its optical axis. With the camera looking down, that axis is closer
+  // to vertical than the pitch servo's, which tells the two apart. With the camera straight ahead (as a
+  // handheld stabiliser is calibrated) both axes are level and gravity cannot tell them apart: then the
+  // wiring of the schematic is taken (GPIO3 = atas-bawah, unless an earlier calibration found it swapped).
+  bool levelCam = fabsf(c[1] - c[0]) < 0.1f;
+  int rollS = levelCam ? (cfg.swapServo ? 0 : 1) : ((c[1] >= c[0]) ? 1 : 0);
   int pitchS = 1 - rollS;
   int8_t newSwap = (rollS == 0) ? 1 : 0;
   // F axis = roll servo rotation axis, pointing down-forward (F . up < 0)
@@ -1114,11 +1114,12 @@ void calAutoSolve() {
     calFail("IMU tidak sejajar dengan kamera atau dudukan bergerak saat diukur.");
     return;
   }
-  if (fabsf(cal.up[iF]) < 0.12f) {
-    calFail("Saat kalibrasi, kamera harus mengarah minimal 10 derajat ke bawah.");
-    return;
-  }
-  int8_t sF = (cal.up[iF] > 0) ? -1 : 1;
+  // forward = the end of the optical axis that points down. Camera (nearly) level: keep the forward
+  // direction of the previous calibration if it was the same IMU axis, otherwise assume +.
+  int8_t sF;
+  bool fGuess = fabsf(cal.up[iF]) < 0.12f;
+  if (!fGuess) sF = (cal.up[iF] > 0) ? -1 : 1;
+  else sF = (cfg.axF == iF) ? cfg.sgF : 1;
   // U axis = what is left of 'up' after removing F
   float w[3] = { cal.up[0], cal.up[1], cal.up[2] };
   w[iF] = 0;
@@ -1219,6 +1220,11 @@ void calAutoSolve() {
         cfg.dbComp);
   event("Kalibrasi otomatis selesai: sumbu %s, kabel servo %s, %.1f/%.1f us per derajat", ax, cfg.swapServo ? "tertukar (sudah dikompensasi)" : "benar",
         cfg.usDegP, cfg.usDegR);
+  if (levelCam)
+    event("Kamera lurus saat kalibrasi: servo atas-bawah dianggap di GPIO%d sesuai kabel. Cek di mode Manual: slider atas-bawah harus "
+          "membuat kamera mengangguk. Kalau malah memiringkan kanan-kiri, kirim SET swap %d lalu ulangi kalibrasi (atau kalibrasi dengan kamera menunduk).",
+          cfg.swapServo ? 4 : 3, cfg.swapServo ? 0 : 1);
+  if (fGuess) event("Arah depan kamera diambil dari kalibrasi sebelumnya (kamera lurus saat diukur).");
   if (timed) event("Kecepatan servo: jeda %.0f ms, waktu tanggap %.0f ms", cfg.srvDelay, cfg.srvTau);
   else event("Kecepatan servo tidak terukur jelas (%d/8 langkah); memakai %.0f/%.0f ms", cal.tCount, cfg.srvDelay, cfg.srvTau);
   if (dbOk) event("Zona mati servo: atas-bawah %.0f us, kanan-kiri %.0f us (dipakai %.0f us)", dbP, dbR, cfg.srvDb);
@@ -2234,7 +2240,7 @@ bool setParam(const char *key, const char *val, char *err, size_t errLen) {
     cfg.field = (int)clampf((float)iv, lo, hi); \
     return true; \
   }
-  F_("pitch", pitchSet, 10.0f, 60.0f)
+  F_("pitch", pitchSet, -45.0f, 60.0f)  // negative = camera looks up
   F_("roll", rollSet, -15.0f, 15.0f)
   F_("kp", kp, 0.0f, 1.5f)
   F_("gain", gain, 0.5f, 30.0f)
@@ -2259,7 +2265,7 @@ bool setParam(const char *key, const char *val, char *err, size_t errLen) {
   I_("swap", swapServo, 0, 1)
   F_("usdegp", usDegP, 5.0f, 20.0f)
   F_("usdegr", usDegR, 5.0f, 20.0f)
-  F_("limp", limP, 3.0f, 25.0f)
+  F_("limp", limP, 3.0f, 60.0f)
   F_("limr", limR, 3.0f, 50.0f)
   F_("lvlp", lvlP, -30.0f, 30.0f)
   F_("lvlr", lvlR, -30.0f, 30.0f)

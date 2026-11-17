@@ -123,6 +123,9 @@ small{color:var(--tx2);font-size:13px}
 .presets button{flex:1;min-width:0;padding:9px 0;border:1px solid var(--line);background:var(--s1);border-radius:var(--rs);font-family:var(--disp);font-weight:600;font-size:16px;cursor:pointer;color:var(--tx)}
 .presets button[aria-pressed=true]{background:var(--amber);color:var(--amberInk);border-color:var(--amber)}
 .fine{display:flex;align-items:center;gap:8px;margin-top:8px}
+.tgthint{margin:6px 2px 0;font-size:12px;color:var(--tx2)}
+.tgtnote{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px;padding:8px 10px;border-radius:10px;border:1px solid rgba(246,199,122,.35);background:rgba(246,199,122,.08);color:#F6C77A;font-size:12.5px}
+.tgtnote[hidden]{display:none}
 .fine input{flex:1}
 .fine .num{min-width:56px;text-align:right;font-size:16px;font-weight:600}
 /* ---------- bottom nav (rail on desktop) */
@@ -277,14 +280,16 @@ body.demo .demochip{display:inline-block}
   <main class="pages">
     <div class="ctrl">
       <div class="presets" id="presets" aria-label="Pilihan cepat sudut atas-bawah">
-        <button data-p="25">25°</button><button data-p="30">30°</button><button data-p="35">35°</button><button data-p="40">40°</button><button data-p="45">45°</button>
+        <button data-p="-20" title="Mendongak 20°">−20°</button><button data-p="-10" title="Mendongak 10°">−10°</button><button data-p="0" title="Lurus ke depan">0° lurus</button><button data-p="20" title="Menunduk 20°">20°</button><button data-p="35" title="Menunduk 35° (dipakai di sabuk)">35°</button>
       </div>
       <div class="fine">
         <button class="btn sm ghost" id="pMinus" aria-label="Kurangi 0,5 derajat">−0,5</button>
-        <input type="range" id="pitchSlider" min="10" max="60" step="0.5" value="35" aria-label="Target sudut atas-bawah">
+        <input type="range" id="pitchSlider" min="-45" max="60" step="0.5" value="0" aria-label="Target sudut atas-bawah">
         <button class="btn sm ghost" id="pPlus" aria-label="Tambah 0,5 derajat">+0,5</button>
-        <span class="num" id="pitchSetTxt">35,0°</span>
+        <span class="num" id="pitchSetTxt">0,0°</span>
       </div>
+      <p class="tgthint">Target atas-bawah: 0° = lurus ke depan, + = menunduk, − = mendongak.</p>
+      <div class="tgtnote" id="tgtNote" hidden><span id="tgtNoteTxt"></span><button class="btn sm" id="tgtStab">Aktifkan Stabil</button></div>
     </div>
     <!-- ===== KONTROL -->
     <div class="panel on" id="t-kontrol" role="tabpanel">
@@ -358,7 +363,7 @@ body.demo .demochip{display:inline-block}
           <label class="field"><span>Arah servo putar kanan-kiri</span><select data-key="dirr"><option value="1">Normal</option><option value="-1">Terbalik</option></select></label>
           <label class="field"><span>µs per derajat, servo putar atas-bawah</span><input type="number" step="0.1" min="5" max="20" data-key="usdegp"></label>
           <label class="field"><span>µs per derajat, servo putar kanan-kiri</span><input type="number" step="0.1" min="5" max="20" data-key="usdegr"></label>
-          <label class="field"><span>Batas gerak atas-bawah (±°)</span><input type="number" step="0.5" min="3" max="25" data-key="limp"></label>
+          <label class="field"><span>Batas gerak atas-bawah (±°)</span><input type="number" step="0.5" min="3" max="60" data-key="limp"></label>
           <label class="field"><span>Batas gerak kanan-kiri (±°)</span><input type="number" step="0.5" min="3" max="50" data-key="limr"></label>
           <label class="field"><span>Kabel servo</span><select data-key="swap"><option value="0">GPIO3 atas-bawah, GPIO4 kanan-kiri</option><option value="1">Tertukar (GPIO3 kanan-kiri)</option></select></label>
           <label class="field"><span>Sumbu MPU6050 (maju, kiri, atas)</span><input type="text" data-key="axes" placeholder="+X+Y+Z" maxlength="6"></label>
@@ -711,7 +716,7 @@ class DemoLink {
   get name() { return "Gimbal D435 (demo)"; }
   async open() {
     this.pin = "123456"; this.authed = true; this.nonce = "";   // a simulation has nothing to protect: no PIN
-    this.cfg = { pitch: 35, roll: 0, ...DEMO_TUNING, autobias: 1, bootgyro: 1, nod: 1, trimp: 0, trimr: 0, dirp: 1, dirr: 1, swap: 0, usdegp: 10.5, usdegr: 10.5, limp: 25, limr: 50, lvlp: 0, lvlr: 0, axes: "+X+Y+Z", tel: 20, led: 1, startmode: 0, name: "Gimbal D435", cal: 4, defpin: 1, mode: "center", sdelay: 15, stau: 25 };
+    this.cfg = { pitch: 0, roll: 0, ...DEMO_TUNING, autobias: 1, bootgyro: 1, nod: 1, trimp: 0, trimr: 0, dirp: 1, dirr: 1, swap: 0, usdegp: 10.5, usdegr: 10.5, limp: 50, limr: 50, lvlp: 0, lvlr: 0, axes: "+X+Y+Z", tel: 20, led: 1, startmode: 0, name: "Gimbal D435", cal: 4, defpin: 1, mode: "center", sdelay: 15, stau: 25 };
     this.ax = [this.newAxis(), this.newAxis()];   // [pitch, roll]
     this.ms = 0; this.n = 0; this.wall = performance.now(); this.man = [0, 0]; this.stepOff = [0, 0]; this.stepRun = null;
     this.gp = 0; this.gj = 0; this.b = this.body(0); this.resetGait();
@@ -902,7 +907,7 @@ class DemoLink {
       case "PIN": this.pin = a1; c.defpin = a1 === "123456" ? 1 : 0; this.out("OK PIN"); return this.out(this.cfgLine());
       case "NAME": c.name = (a1 || "").replace(/_/g, " "); return this.out(`OK NAME ${c.name} (berlaku setelah restart)`);
       case "SAVE": return this.out("OK SAVE");
-      case "DEFAULTS": Object.assign(c, DEMO_TUNING, { pitch: 35, roll: 0 }); return this.out(this.cfgLine());
+      case "DEFAULTS": Object.assign(c, DEMO_TUNING, { pitch: 0, roll: 0 }); return this.out(this.cfgLine());
       case "REBOOT": this.out("OK REBOOT"); setTimeout(() => this.close(), 300); return;
       case "HELP": return this.out("HELP (demo) GET STATUS SET MODE MAN CAL STEP PIN NAME SAVE DEFAULTS REBOOT");
       default: return this.out("ERR perintah tidak dikenal: " + C + " (kirim HELP)");
@@ -1116,7 +1121,7 @@ function explain(d) {
   else { tP.textContent = signed(d.op) + "°"; tR.textContent = signed(d.or) + "°"; }
   let w = "";
   if (!(d.flags & 1)) w = "MPU6050 tidak terbaca. Periksa keempat kabel sensor.";
-  else if (d.mode === 0 && (d.flags & 24)) w = ((d.flags & 8) && (d.flags & 16) ? "Kedua servo" : (d.flags & 8) ? "Servo atas-bawah di batas ±" + fmt(+S.cfg.limp || 25, 0) + "°" : "Servo kanan-kiri di batas ±" + fmt(+S.cfg.limr || 25, 0) + "°") + (d.flags & 8 && d.flags & 16 ? " di batas geraknya" : "") + ". Badan terlalu miring.";
+  else if (d.mode === 0 && (d.flags & 24)) w = ((d.flags & 8) && (d.flags & 16) ? "Kedua servo" : (d.flags & 8) ? "Servo atas-bawah di batas ±" + fmt(+S.cfg.limp || 50, 0) + "°" : "Servo kanan-kiri di batas ±" + fmt(+S.cfg.limr || 50, 0) + "°") + (d.flags & 8 && d.flags & 16 ? " di batas geraknya" : "") + ". Badan terlalu miring.";
   else if (d.mode === 0 && S.cfg.cal !== undefined && !(+S.cfg.cal & 1)) w = "Belum dikalibrasi: Stabil memakai setelan aman.";
   else if (d.mode === 1) w = "Mode Tengah: servo diam.";
   $("#chWarn").textContent = w; $("#chWarn").hidden = !w;
@@ -1164,8 +1169,10 @@ function applyCfg(c) {
   if (!S.dragging.has($("#rollSlider"))) $("#rollSlider").value = c.roll;
   $("#rollSetTxt").textContent = fmt(c.roll) + "°";
   $$("#modeSeg button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.m === c.mode));
-  const help = { stab: "Stabil: kamera dijaga di sudut target.", center: "Tengah: kedua servo diam di tengah. Dipakai saat memasang horn.", manual: "Manual: servo digerakkan dari slider di bawah.", off: "Nonaktif: servo tidak diberi sinyal dan bisa diputar tangan." };
+  const help = { stab: "Stabil: kamera dijaga di sudut target, walau badan miring.", center: "Tengah: kedua servo diam di tengah. Dipakai saat memasang horn.", manual: "Manual: servo digerakkan dari slider di bawah.", off: "Nonaktif: servo tidak diberi sinyal dan bisa diputar tangan." };
   $("#modeHelp").textContent = help[c.mode] || "";
+  const tn = { center: "Mode Tengah: target belum dipakai, servo dikunci di tengah.", manual: "Mode Manual: target belum dipakai, servo mengikuti slider manual.", off: "Mode Nonaktif: target belum dipakai, servo tanpa sinyal." }[c.mode];
+  $("#tgtNote").hidden = !tn; if (tn) $("#tgtNoteTxt").textContent = tn + " Target hanya berlaku di mode Stabil.";
   $("#manualBlk").hidden = c.mode !== "manual";
   $("#lvlrTxt").textContent = fmt(c.lvlr, 2) + "°"; $("#lvlpTxt").textContent = fmt(c.lvlp, 2) + "°";
   $("#trimpTxt").textContent = c.trimp + " µs"; $("#trimrTxt").textContent = c.trimr + " µs";
@@ -1184,10 +1191,12 @@ $$("[data-key]").forEach((el) => {
   else if (el.type === "checkbox") el.addEventListener("change", () => send(`SET ${k} ${el.checked ? 1 : 0}`));
   else el.addEventListener("change", () => send(`SET ${k} ${el.value.trim()}`));
 });
-function setPitch(v) { v = Math.max(10, Math.min(60, Math.round(v * 2) / 2)); $("#pitchSetTxt").textContent = fmt(v) + "°"; $("#pitchSlider").value = v; $$("#presets button").forEach((b) => b.setAttribute("aria-pressed", Math.abs(+b.dataset.p - v) < 0.01)); sendSet("pitch", v, 60); }
+function setPitch(v) { v = Math.max(-45, Math.min(60, Math.round(v * 2) / 2)); $("#pitchSetTxt").textContent = fmt(v) + "°"; $("#pitchSlider").value = v; $$("#presets button").forEach((b) => b.setAttribute("aria-pressed", Math.abs(+b.dataset.p - v) < 0.01)); sendSet("pitch", v, 60); }
 $$("#presets button").forEach((b) => b.addEventListener("click", () => setPitch(+b.dataset.p)));
-$("#pMinus").onclick = () => setPitch((+S.cfg.pitch || 35) - 0.5);
-$("#pPlus").onclick = () => setPitch((+S.cfg.pitch || 35) + 0.5);
+const curPitch = () => (Number.isFinite(+S.cfg.pitch) ? +S.cfg.pitch : 0);  // 0 is a real target, not "unknown"
+$("#pMinus").onclick = () => setPitch(curPitch() - 0.5);
+$("#pPlus").onclick = () => setPitch(curPitch() + 0.5);
+$("#tgtStab").onclick = () => send("MODE stab");
 const ps = $("#pitchSlider"); trackDrag(ps); ps.addEventListener("input", () => setPitch(+ps.value));
 const rs = $("#rollSlider"); trackDrag(rs); rs.addEventListener("input", () => { $("#rollSetTxt").textContent = fmt(+rs.value) + "°"; sendSet("roll", rs.value); });
 $("#rollZero").onclick = () => { rs.value = 0; $("#rollSetTxt").textContent = "0,0°"; send("SET roll 0"); };

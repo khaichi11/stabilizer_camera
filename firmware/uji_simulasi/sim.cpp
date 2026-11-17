@@ -415,6 +415,9 @@ int main() {
   check(cal.tCount >= 6 && cfg.srvDelay >= 0 && cfg.srvDelay < 40 && cfg.srvTau > 8 && cfg.srvTau < 2.5 * envd("SRV_TAU", 25.0), "servo delay and lag measured");
   printf("   bias %.2f %.2f %.2f (true %.2f %.2f %.2f)\n", cfg.bias[0], cfg.bias[1], cfg.bias[2], W.gyroBias[0], W.gyroBias[1], W.gyroBias[2]);
 
+  // The default target is 0 (camera straight ahead, like a handheld stabiliser). The tests below model
+  // belt use, camera 35 deg down, so they ask for it the way a user would.
+  usb("SET pitch 35");
   printf("== stabilise, body still (IMU mounted 1.5/1.0 deg crooked, not yet levelled)\n");
   run(6.0);
   double tp, tr;
@@ -748,6 +751,37 @@ int main() {
       p99(wj.jp), p99(wj.jr), p99(wj.jcp), p99(wj.jcr), wt.sp.rms(), wt.sr.rms(), p99(wt.jp), p99(wt.jr));
     if (getenv("QUICK")) return 0;
     check(tIn > 0 && tIn < 0.3 && peak < 1.25 && endErr < 0.5, "step: within 1 deg in 0.3 s, overshoot < 25%, settles within 0.5 deg");
+  }
+
+  printf("== handheld: target 0 (straight ahead), body leans far and comes back\n");
+  {
+    usb("SET pitch 0");
+    usb("SET roll 0");
+    run(3.0);
+    // sideways 45 deg both ways, nose up 25, nose down 10, and a mix (leanF < 0 = body leans forward).
+    // The pitch servo's centre already looks 37 deg down in this frame, so straight ahead needs -37 deg
+    // and a forward lean of more than ~13 deg runs into the +-50 deg servo limit.
+    struct Pose { double s, f; const char *name; } poses[] = {
+        {45, 0, "miring kanan 45"}, {-45, 0, "miring kiri 45"}, {0, 25, "mendongak 25"}, {0, -10, "menunduk 10"}, {30, 15, "miring 30 + mendongak 15"}};
+    for (auto &ps : poses) {
+      double t0 = t_us * 1e-6, s0 = W.leanS, f0 = W.leanF;
+      W.body = [=](double t, World &w) {
+        double r = std::min(1.0, std::max(0.0, (t - t0) / 1.0));  // lean over 1 s, then hold
+        w.leanS = s0 + (ps.s - s0) * r;
+        w.leanF = f0 + (ps.f - f0) * r;
+      };
+      run(3.0);
+      truth(tp, tr);
+      printf("   %-26s camera pitch %+6.2f roll %+6.2f\n", ps.name, tp, tr);
+      char msg[96];
+      snprintf(msg, sizeof msg, "handheld %s: camera back to straight/level within 1 deg", ps.name);
+      check(fabs(tp) < 1.0 && fabs(tr) < 1.0, msg);
+    }
+    W.body = nullptr;
+    W.leanF = W.leanS = W.yaw = 0;
+    usb("SET pitch 35");
+    run(3.0);
+    takeUsb();
   }
 
   printf("== WiFi: first start\n");
