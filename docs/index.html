@@ -106,7 +106,7 @@ small{color:var(--tx2);font-size:13px}
 .viewbtns{position:absolute;right:10px;top:10px;display:flex;gap:2px;padding:3px}
 .viewbtns button{border:0;background:transparent;color:var(--tx2);font:500 12.5px var(--ui);padding:6px 10px;border-radius:7px;cursor:pointer;display:flex;align-items:center}
 .viewbtns button[aria-pressed=true]{background:rgba(255,255,255,.1);color:var(--tx)}
-.warn3d{position:absolute;left:10px;top:10px;max-width:56%;padding:7px 10px;font-size:12.5px;color:#F6C77A}
+.warn3d{position:absolute;left:10px;top:54px;max-width:calc(100% - 20px);padding:7px 10px;font-size:12.5px;color:#F6C77A}
 .walk3d{position:absolute;left:10px;top:10px;padding:6px 10px;font-size:12.5px;color:var(--tx2);display:flex;align-items:center;gap:7px}
 .walk3d i{width:7px;height:7px;border-radius:50%;background:#7FB77E}
 .tag{position:absolute;left:0;top:0;transform:translate(-50%,-100%);pointer-events:none;white-space:nowrap;font-size:11px;color:var(--tx2);padding:4px 8px 5px;will-change:transform;line-height:1.25}
@@ -1117,7 +1117,7 @@ function explain(d) {
   let w = "";
   if (!(d.flags & 1)) w = "MPU6050 tidak terbaca. Periksa keempat kabel sensor.";
   else if (d.mode === 0 && (d.flags & 24)) w = ((d.flags & 8) && (d.flags & 16) ? "Kedua servo" : (d.flags & 8) ? "Servo atas-bawah di batas ±" + fmt(+S.cfg.limp || 25, 0) + "°" : "Servo kanan-kiri di batas ±" + fmt(+S.cfg.limr || 25, 0) + "°") + (d.flags & 8 && d.flags & 16 ? " di batas geraknya" : "") + ". Badan terlalu miring.";
-  else if (d.mode === 0 && S.cfg.cal !== undefined && !(+S.cfg.cal & 1)) w = "Belum dikalibrasi otomatis: mode Stabil memakai setelan aman (lebih pelan). Jalankan Kalibrasi otomatis.";
+  else if (d.mode === 0 && S.cfg.cal !== undefined && !(+S.cfg.cal & 1)) w = "Belum dikalibrasi: Stabil memakai setelan aman.";
   else if (d.mode === 1) w = "Mode Tengah: servo diam.";
   $("#chWarn").textContent = w; $("#chWarn").hidden = !w;
   $("#chWalk").hidden = !!w || !(d.flags & 128);
