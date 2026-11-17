@@ -124,6 +124,10 @@ small{color:var(--tx2);font-size:13px}
 .presets button[aria-pressed=true]{background:var(--amber);color:var(--amberInk);border-color:var(--amber)}
 .fine{display:flex;align-items:center;gap:8px;margin-top:8px}
 .tgthint{margin:6px 2px 0;font-size:12px;color:var(--tx2)}
+.spdwarn{margin:6px 0 0;font-size:13px;font-weight:600;color:var(--warn)}
+.conv{margin:4px 0 12px;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,.04);font-size:13px;line-height:1.5}
+.conv b{display:block;margin-bottom:2px}
+.conv .row{margin-top:8px}
 .tgtnote{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px;padding:8px 10px;border-radius:10px;border:1px solid rgba(246,199,122,.35);background:rgba(246,199,122,.08);color:#F6C77A;font-size:12.5px}
 .tgtnote[hidden]{display:none}
 .fine input{flex:1}
@@ -320,15 +324,32 @@ body.demo .demochip{display:inline-block}
 
     <!-- ===== KALIBRASI -->
     <div class="panel" id="t-kalibrasi" role="tabpanel">
-      <div class="ph"><h2>Kalibrasi</h2><p>Lakukan sekali setelah perakitan, secara berurutan.</p></div>
+      <div class="ph"><h2>Kalibrasi</h2><p>Tidak ada kalibrasi servo. Atur servo sekali di bawah, lalu kalibrasi datar.</p></div>
+      <div class="card" id="srvCard">
+        <header><h2>Servo</h2><p>Diatur sendiri, tidak diukur otomatis. Servo tidak dipaksa bergerak jauh untuk diukur.</p></header>
+        <div class="field"><div class="t2"><span>Kecepatan servo</span><span class="val" data-show="maxrate"></span></div><input type="range" data-key="maxrate" min="20" max="600" step="5"><p>Bawaan 60°/s: pelan, halus, dan servo awet. Guncangan kecil saat berjalan tetap diredam. Makin cepat, makin sigap melawan guncangan besar, tetapi servo lebih panas dan cepat aus.</p>
+          <p class="spdwarn" id="spdWarn" hidden>Kecepatan di atas 200°/s: servo MG90S cepat panas dan giginya cepat aus atau patah, terutama yang menahan D435. Pakai hanya jika perlu.</p></div>
+        <div class="grid2">
+          <label class="field"><span>Arah servo putar atas-bawah</span><select data-key="dirp"><option value="1">Normal</option><option value="-1">Terbalik</option></select></label>
+          <label class="field"><span>Arah servo putar kanan-kiri</span><select data-key="dirr"><option value="1">Normal</option><option value="-1">Terbalik</option></select></label>
+          <label class="field"><span>Kabel servo</span><select data-key="swap"><option value="0">GPIO3 atas-bawah, GPIO4 kanan-kiri</option><option value="1">Tertukar (GPIO3 kanan-kiri)</option></select></label>
+          <label class="field"><span>Sumbu MPU6050 (maju, kiri, atas)</span><input type="text" data-key="axes" placeholder="+X+Y+Z" maxlength="6"></label>
+          <label class="field"><span>µs per derajat, atas-bawah</span><input type="number" step="0.1" min="5" max="60" data-key="usdegp"></label>
+          <label class="field"><span>µs per derajat, kanan-kiri</span><input type="number" step="0.1" min="5" max="60" data-key="usdegr"></label>
+          <label class="field"><span>Paling mendongak (°, aman −1)</span><input type="number" step="0.5" min="-60" max="0" data-key="limpmin"></label>
+          <label class="field"><span>Paling menunduk (°, aman 16)</span><input type="number" step="0.5" min="0" max="60" data-key="limpmax"></label>
+          <label class="field"><span>Batas gerak atas-bawah (±°)</span><input type="number" step="0.5" min="3" max="60" data-key="limp"></label>
+          <label class="field"><span>Batas gerak kanan-kiri (±°)</span><input type="number" step="0.5" min="3" max="60" data-key="limr"></label>
+        </div>
+        <p class="muted" style="font-size:13px">MG90S 180°: sekitar 11 µs per derajat. Cara memeriksa arah: pilih mode Stabil, lalu miringkan gimbal pelan-pelan. Kamera harus melawan kemiringan dan tetap lurus. Kalau kamera malah ikut miring makin jauh, ubah arah servo sumbu itu. Kalau sumbu yang salah ikut bergerak, periksa kabel servo atau sumbu MPU6050.</p>
+        <div class="conv" id="convBox"><b>Konversi sudut</b><span id="convTxt">Menunggu data gimbal…</span><div class="row" id="convFix" hidden><button class="btn sm" id="convUse">Pakai skala ini</button></div></div>
+        <details class="more"><summary>Percepatan servo (lanjutan)</summary><div>
+          <label class="field"><span>Percepatan maksimum (°/s², 0 = tanpa batas)</span><input type="number" step="100" min="0" max="20000" data-key="srvacc"></label>
+          <p class="muted" style="font-size:13px">Bawaan 0. Membatasi percepatan membuat awal dan akhir gerakan lebih lembut, tetapi kamera terlambat mengikuti dan guncangan langkah kurang teredam. Jika dipakai, jangan di bawah 1500.</p>
+        </div></details>
+      </div>
       <div class="card steps">
-        <div class="step" id="calAutoLi"><span class="n">1</span><div class="b">
-          <h3>Kalibrasi otomatis</h3>
-          <p class="muted">Tegakkan dudukan seperti saat dipakai, dengan kamera mengarah ke bawah. Jangan disentuh selama ±20 detik.</p>
-          <div class="row"><button class="btn primary" id="calAuto">Mulai kalibrasi otomatis</button></div>
-          <div class="progress" id="calAutoOut" hidden></div>
-        </div></div>
-        <div class="step" id="calLevelLi"><span class="n">2</span><div class="b">
+        <div class="step" id="calLevelLi"><span class="n">1</span><div class="b">
           <h3>Kalibrasi datar</h3>
           <p class="muted">Letakkan waterpass atau ponsel (aplikasi waterpass) di atas D435, lalu isi angka yang terbaca.</p>
           <div class="grid2">
@@ -344,11 +365,17 @@ body.demo .demochip{display:inline-block}
             <div class="field"><span>Atas-bawah</span><div class="nudge"><button class="btn sm" data-nudge="lvlp" data-d="0.1">Lebih ke atas</button><span class="num" id="lvlpTxt">0,00°</span><button class="btn sm" data-nudge="lvlp" data-d="-0.1">Lebih ke bawah</button></div></div>
           </div></details>
         </div></div>
-        <div class="step" id="calGyroLi"><span class="n">3</span><div class="b">
+        <div class="step" id="calGyroLi"><span class="n">2</span><div class="b">
           <h3>Kalibrasi gyro</h3>
           <p class="muted">Dilakukan otomatis setiap gimbal dinyalakan; jarang diperlukan.</p>
           <div class="row"><button class="btn" id="calGyro">Kalibrasi gyro (2 detik)</button></div>
           <div class="progress" id="calGyroOut" hidden></div>
+        </div></div>
+        <div class="step" id="calTwinLi"><span class="n">3</span><div class="b">
+          <h3>Samakan model 3D (digital twin)</h3>
+          <p class="muted">Pilih mode Tengah, tegakkan badan gimbal seperti saat dipakai, lalu tekan tombol. Servo tidak digerakkan: gimbal hanya mencatat ke mana kamera menghadap saat kedua servo di tengah, supaya model 3D sama persis dengan gimbal Anda.</p>
+          <div class="row"><button class="btn" id="calTwin">Samakan model 3D</button></div>
+          <div class="progress" id="calTwinOut" hidden></div>
         </div></div>
       </div>
       <div class="card">
@@ -356,20 +383,7 @@ body.demo .demochip{display:inline-block}
         <div class="field"><span>Servo putar atas-bawah</span><div class="nudge"><button class="btn sm" data-nudge="trimp" data-d="-5">−5 µs</button><span class="num" id="trimpTxt">0 µs</span><button class="btn sm" data-nudge="trimp" data-d="5">+5 µs</button></div></div>
         <div class="field"><span>Servo putar kanan-kiri</span><div class="nudge"><button class="btn sm" data-nudge="trimr" data-d="-5">−5 µs</button><span class="num" id="trimrTxt">0 µs</span><button class="btn sm" data-nudge="trimr" data-d="5">+5 µs</button></div></div>
       </div>
-      <div class="card"><details class="more"><summary>Pengaturan servo dan sensor lanjutan</summary><div>
-        <p class="muted">Diisi otomatis oleh kalibrasi.</p>
-        <div class="grid2">
-          <label class="field"><span>Arah servo putar atas-bawah</span><select data-key="dirp"><option value="1">Normal</option><option value="-1">Terbalik</option></select></label>
-          <label class="field"><span>Arah servo putar kanan-kiri</span><select data-key="dirr"><option value="1">Normal</option><option value="-1">Terbalik</option></select></label>
-          <label class="field"><span>µs per derajat, servo putar atas-bawah</span><input type="number" step="0.1" min="5" max="20" data-key="usdegp"></label>
-          <label class="field"><span>µs per derajat, servo putar kanan-kiri</span><input type="number" step="0.1" min="5" max="20" data-key="usdegr"></label>
-          <label class="field"><span>Batas gerak atas-bawah (±°)</span><input type="number" step="0.5" min="3" max="60" data-key="limp"></label>
-          <label class="field"><span>Batas gerak kanan-kiri (±°)</span><input type="number" step="0.5" min="3" max="60" data-key="limr"></label>
-          <label class="field"><span>Kabel servo</span><select data-key="swap"><option value="0">GPIO3 atas-bawah, GPIO4 kanan-kiri</option><option value="1">Tertukar (GPIO3 kanan-kiri)</option></select></label>
-          <label class="field"><span>Sumbu MPU6050 (maju, kiri, atas)</span><input type="text" data-key="axes" placeholder="+X+Y+Z" maxlength="6"></label>
-        </div>
-        <p class="muted" style="font-size:13px">Maksimal ±25° (bebas tabrakan).</p>
-      </div></details></div>
+
     </div>
 
     <!-- ===== PID -->
@@ -388,17 +402,16 @@ body.demo .demochip{display:inline-block}
           <label class="field"><span>Jeda servo (ms)</span><input type="number" step="0.5" min="0" max="60" data-key="sdelay"></label>
           <label class="field"><span>Lambat servo (ms)</span><input type="number" step="0.5" min="5" max="120" data-key="stau"></label>
         </div>
-        <p class="muted" style="margin:2px 0 12px;font-size:13px">Kedua nilai ini diukur otomatis saat kalibrasi otomatis.</p>
+        <p class="muted" style="margin:2px 0 12px;font-size:13px">Bawaan cocok untuk MG90S. Jika kamera terasa mendahului gerak badan, kecilkan Prediksi.</p>
         <div class="field"><div class="t2"><span>Pola langkah</span><span class="val" data-show="gait"></span></div><input type="range" data-key="gait" min="0" max="1" step="0.05"><p>Gimbal mempelajari irama langkah Anda, lalu menggerakkan servo atas-bawah sedikit sebelum hentakan tiap langkah. Berlaku juga untuk langkah kanan dan kiri yang berbeda, misalnya saat naik tangga. 0 = mati.</p></div>
-        <div class="field"><div class="t2"><span>Lebar zona mati servo</span><span class="val" data-show="sdb"></span></div><input type="range" data-key="sdb" min="0" max="40" step="0.5"><p>Seperti pada spesifikasi servo (MG90S: 10 µs). Diukur otomatis saat kalibrasi otomatis.</p></div>
-        <div class="field"><div class="t2"><span>Kompensasi zona mati</span><span class="val" data-show="dbcomp"></span></div><input type="range" data-key="dbcomp" min="0" max="10" step="0.5"><p>Diisi otomatis seperempat lebar zona mati. Turunkan jika servo berdengung saat diam.</p></div>
+        <div class="field"><div class="t2"><span>Lebar zona mati servo</span><span class="val" data-show="sdb"></span></div><input type="range" data-key="sdb" min="0" max="40" step="0.5"><p>Seperti pada spesifikasi servo (MG90S: 10 µs).</p></div>
+        <div class="field"><div class="t2"><span>Kompensasi zona mati</span><span class="val" data-show="dbcomp"></span></div><input type="range" data-key="dbcomp" min="0" max="10" step="0.5"><p>Sekitar seperempat lebar zona mati. Turunkan jika servo berdengung saat diam.</p></div>
         <div class="field"><div class="t2"><span>Akselerometer saat berjalan</span><span class="val" data-show="acctauw"></span></div><input type="range" data-key="acctauw" min="0.3" max="10" step="0.1"><p>Makin besar, hentakan langkah makin tidak terbaca sebagai kemiringan.</p></div>
       </div>
       <div class="card">
         <div class="field"><div class="t2"><span>Dead band</span><span class="val" data-show="db"></span></div><input type="range" data-key="db" min="0" max="1.5" step="0.05"><p>Mencegah servo berdengung.</p></div>
         <div class="field"><div class="t2"><span>Kehalusan pindah target</span><span class="val" data-show="soft"></span></div><input type="range" data-key="soft" min="0" max="1" step="0.05"><p>Saat target atau mode diganti, kamera meluncur pelan ke sudut baru (0 = langsung). Stabilisasinya tetap cepat.</p></div>
 <div class="field"><div class="t2"><span>Penghalus gerak servo</span><span class="val" data-show="smooth"></span></div><input type="range" data-key="smooth" min="0" max="0.2" step="0.005"><p>Makin halus, makin lambat.</p></div>
-        <div class="field"><div class="t2"><span>Kecepatan servo maksimal</span><span class="val" data-show="maxrate"></span></div><input type="range" data-key="maxrate" min="60" max="800" step="10"><p>Juga membatasi lonjakan arus.</p></div>
         <div class="field"><div class="t2"><span>Kepercayaan akselerometer</span><span class="val" data-show="acctau"></span></div><input type="range" data-key="acctau" min="0.1" max="3" step="0.05"><p>Makin besar, makin tahan guncangan.</p></div>
         <label class="field"><span>Denyut servo</span><select data-key="pwmhz"><option value="50">50 Hz, kalau servo panas atau berdengung</option><option value="100">100 Hz (bawaan)</option><option value="150">150 Hz</option><option value="200">200 Hz</option><option value="333">333 Hz, khusus servo digital</option></select></label>
         <p class="muted" style="margin:-4px 0 12px;font-size:13px">Makin sering, makin halus gerak servo dan makin kecil getaran (efek jello) pada video.</p>
@@ -439,7 +452,7 @@ body.demo .demochip{display:inline-block}
           <tr><td><span class="dot" style="background:#2E9C6E"></span>GPIO7</td><td>SCL MPU6050</td></tr>
           <tr><td>USB-C</td><td>Power bank 5 V ≥ 2 A lewat kabel USB-A ke USB-C</td></tr>
         </table>
-        <p class="note">Kabel tertukar atau sensor terbalik akan diperbaiki oleh kalibrasi otomatis.</p></div>
+        <p class="note">Kabel servo tertukar atau sensor terpasang terbalik: atur di menu Kalibrasi, bagian Servo.</p></div>
       <div class="card" id="wifiCard"><header><h2>WiFi</h2><p id="wifiNow">Belum ada data.</p></header>
         <div class="addr" id="wifiAddr" hidden></div>
         <div class="row"><button class="btn" id="wifiScan">Cari hotspot</button></div>
@@ -706,7 +719,7 @@ class SerialLink {
 //  - the servo bought for it (MG90S compatible): reads a new pulse once per frame (100 Hz), dead band width
 //    10 us (does nothing within 5 us of its position), 25 ms lag, 545 deg/s (0.11 s/60 deg)
 //  - MPU6050: 4.8 ms filter delay, plus the small error walking leaves in the angle estimate
-const DEMO_TUNING = { kp: 0.6, gain: 10, ff: 0.8, db: 0.2, smooth: 0.02, maxrate: 400, acctau: 0.6, acctauw: 3, ffb: 1, pred: 1.1, sdb: 10, dbcomp: 2.5, dlpf: 3, pwmhz: 100, gait: 1, soft: 0.5 };
+const DEMO_TUNING = { kp: 0.6, gain: 10, ff: 0.8, db: 0.2, smooth: 0.02, maxrate: 60, srvacc: 0, acctau: 0.6, acctauw: 3, ffb: 1, pred: 1.1, sdb: 10, dbcomp: 2.5, dlpf: 3, pwmhz: 100, gait: 1, soft: 0.5 };
 const SRV_US_TRUE = 11.0, SRV_DB_US = 10, SRV_TAU = 0.025, SRV_VMAX = 545;
 const GAIT_K = 12;
 const clampN = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -717,11 +730,11 @@ class DemoLink {
   get name() { return "Gimbal D435 (demo)"; }
   async open() {
     this.pin = "123456"; this.authed = true; this.nonce = "";   // a simulation has nothing to protect: no PIN
-    this.cfg = { pitch: 0, roll: 0, ...DEMO_TUNING, autobias: 1, bootgyro: 1, nod: 1, trimp: 0, trimr: 0, dirp: 1, dirr: 1, swap: 0, usdegp: 10.5, usdegr: 10.5, limp: 50, limr: 55, lvlp: 0, lvlr: 0, axes: "+X+Y+Z", tel: 20, led: 1, startmode: 0, name: "Gimbal D435", cal: 4, defpin: 1, mode: "center", sdelay: 15, stau: 25 };
+    this.cfg = { pitch: 0, roll: 0, ...DEMO_TUNING, autobias: 1, bootgyro: 1, nod: 1, trimp: 0, trimr: 0, dirp: 1, dirr: 1, swap: 0, usdegp: 10.5, usdegr: 10.5, limp: 16, limpmin: -1, limpmax: 16, twinp: 35, twinr: 0, limr: 55, lvlp: 0, lvlr: 0, axes: "+X+Y+Z", tel: 20, led: 1, startmode: 0, name: "Gimbal D435", cal: 4, defpin: 1, mode: "center", sdelay: 15, stau: 25 };
     this.ax = [this.newAxis(), this.newAxis()];   // [pitch, roll]
     this.ms = 0; this.n = 0; this.wall = performance.now(); this.man = [0, 0]; this.stepOff = [0, 0]; this.stepRun = null;
     this.gp = 0; this.gj = 0; this.b = this.body(0); this.resetGait();
-    this.ev = [[1200, "Menyala (fw 4.2). Penyebab mulai ulang: poweron. Total mulai ulang karena tegangan turun: 0"], [1250, "Belum dikalibrasi: servo ditahan di tengah. Jalankan kalibrasi otomatis."]];
+    this.ev = [[1200, "Menyala (fw 4.4). Penyebab mulai ulang: poweron. Total mulai ulang karena tegangan turun: 0"]];
     this.timer = setInterval(() => this.tick(), 20);
   }
   newAxis() { return { motor: 0, pulse: 0, pending: 0, f1: 0, f2: 0, f2Prev: 0, meas: 0, rate: 0, cmd: 0, slew: 0, out: 0, ff: 0, last: 0, sat: false, hist: new Float32Array(48), hi: 0, m: 0, mrate: 0, dbSg: 0, dbPk: 0 }; }
@@ -844,14 +857,15 @@ class DemoLink {
           this.gaitStep(R.meas - R.m, sp[0] - a.meas, b.walk > 0.5 && !a.sat && c.gait > 0, dt);
           a.ff += this.gaitAdd();
         }
-        const ii = clampN(a.cmd + (c.gain * e - c.ff * a.rate) * dt, -L, L);
+        const ki = ((a.lag > 1 && e > 0) || (a.lag < -1 && e < 0)) ? 0 : c.gain;  // servo still on its way: no wind-up
+        const ii = clampN(a.cmd + (ki * e - c.ff * a.rate) * dt, -L, L);
         const t0 = a.ff + ii + c.kp * e;
         if (!((t0 > L && e > 0) || (t0 < -L && e < 0))) a.cmd = ii;
         const tot = a.ff + a.cmd + c.kp * e;
         a.sat = tot >= L || tot <= -L; tgt = a.last = clampN(tot, -L, L);
       } else if (c.mode === "manual") { tgt = clampN(this.man[i], -L, L); a.cmd = (1 - c.ffb) * tgt; }
       else a.cmd = 0;
-      const st = c.maxrate * dt; a.slew += clampN(tgt - a.slew, -st, st);
+      const st = c.maxrate * dt; a.slew += clampN(tgt - a.slew, -st, st); a.lag = tgt - a.slew;
       a.out += (a.slew - a.out) * dt / (c.smooth + dt);
       this.model(a, a.out, usd[i], dt);
       const us = this.dbComp(a, a.out * usd[i]);
@@ -871,14 +885,14 @@ class DemoLink {
   }
   async send(line) {
     const [cmd, a1, a2, a3] = line.trim().split(/\s+/); const C = cmd.toUpperCase(), c = this.cfg;
-    if (C === "HELLO") return this.out(`HELLO {"fw":"4.2","name":"${c.name}","auth":0,"nonce":"","lock":0,"clients":1}`);
+    if (C === "HELLO") return this.out(`HELLO {"fw":"4.4","name":"${c.name}","auth":0,"nonce":"","lock":0,"clients":1}`);
     if (C === "AUTH") return this.out("AUTH OK");
     if (C === "PING") return this.out("PONG " + this.now());
     if (!this.authed) return this.out("ERR AUTH");
     const [P, R] = this.ax;
     switch (C) {
       case "GET": return this.out(this.cfgLine());
-      case "STATUS": return this.out(`ST {"fw":"4.2","up":${Math.round(this.now() / 1000)},"hz":200,"rst":"poweron","boots":7,"brown":0,"imu":1,"who":"0x68","addr":"0x68","i2cerr":0,"temp":38.4,"bias":[1.21,-0.79,0.48],"heap":181240,"clients":1,"rssi":-54,"mode":"${c.mode}","cal":"${this.cal ? this.cal.kind : "idle"}","still":${this.b.walk > 0 ? 0 : 1},"accrej":3,"usp":${(1500 + P.out * c.usdegp).toFixed(0)},"usr":${(1500 + R.out * c.usdegr).toFixed(0)},"swap":${c.swap},"walk":${this.b.walk.toFixed(2)},"ffp":${P.ff.toFixed(2)},"ffr":${R.ff.toFixed(2)},"ip":${P.cmd.toFixed(2)},"ir":${R.cmd.toFixed(2)},"stride":${(this.g.w / 2 / Math.PI).toFixed(2)},"sway":${this.g.amp.toFixed(1)},"gaitp":${this.gaitAdd().toFixed(2)}}`);
+      case "STATUS": return this.out(`ST {"fw":"4.4","up":${Math.round(this.now() / 1000)},"hz":200,"rst":"poweron","boots":7,"brown":0,"imu":1,"who":"0x68","addr":"0x68","i2cerr":0,"temp":38.4,"bias":[1.21,-0.79,0.48],"heap":181240,"clients":1,"rssi":-54,"mode":"${c.mode}","cal":"${this.cal ? this.cal.kind : "idle"}","still":${this.b.walk > 0 ? 0 : 1},"accrej":3,"usp":${(1500 + P.out * c.usdegp).toFixed(0)},"usr":${(1500 + R.out * c.usdegr).toFixed(0)},"swap":${c.swap},"walk":${this.b.walk.toFixed(2)},"ffp":${P.ff.toFixed(2)},"ffr":${R.ff.toFixed(2)},"ip":${P.cmd.toFixed(2)},"ir":${R.cmd.toFixed(2)},"stride":${(this.g.w / 2 / Math.PI).toFixed(2)},"sway":${this.g.amp.toFixed(1)},"gaitp":${this.gaitAdd().toFixed(2)}}`);
       case "EVLOG": this.ev.slice(-16).forEach(([t, s]) => this.out(`EV ${t} ${s}`)); return this.out("EVEND");
       case "SET": { const k = (a1 || "").toLowerCase(); if (k === "axes") c.axes = a2; else if (k in c) c[k] = Number(a2); return this.out(this.cfgLine()); }
       case "MODE": {
@@ -917,27 +931,11 @@ class DemoLink {
   demoCal(kind, a2, a3) {
     const c = this.cfg;
     if (kind === "abort") { this.cal = null; return this.out("CAL FAIL auto dibatalkan"); }
+    if (kind === "auto") { this.out("ERR kalibrasi servo sudah dihapus: atur arah, kabel, dan skala servo secara manual"); return; }
+    if (kind === "twin") { c.twinp = 35; c.twinr = 0; c.cal |= 8; this.out('CAL DONE twin {"twinp":35.00,"twinr":0.00}'); return this.out(this.cfgLine()); }
     this.out("CAL START " + kind);
     if (kind === "gyro") { this.cal = { kind }; setTimeout(() => { this.cal = null; c.cal |= 4; this.out('CAL DONE gyro {"bias":[1.208,-0.796,0.481],"noise":0.061}'); }, 2000); return; }
     if (kind === "level") { this.cal = { kind }; setTimeout(() => { this.cal = null; if (a2 !== "x") c.lvlp = +(Math.random() * 2 - 1).toFixed(2); if (a3 !== "x") c.lvlr = +(Math.random() * 2 - 1).toFixed(2); c.cal |= 2; this.out(`CAL DONE level {"lvlp":${c.lvlp},"lvlr":${c.lvlr}}`); this.out(this.cfgLine()); }, 1500); return; }
-    if (kind === "auto") {
-      this.cal = { kind, mv: [0, 0] };
-      const plan = [[3200, () => this.out("CAL STEP gyro ok")], [4000, () => { this.out("CAL STEP servo3 move"); this.cal.mv = [14, 0]; }], [5900, () => { this.cal.mv = [0, 0]; }], [6800, () => { this.out("CAL STEP servo4 move"); this.cal.mv = [0, 14]; }], [8700, () => { this.cal.mv = [0, 0]; }], [9600, () => this.out("CAL STEP timing")]];
-      for (let k = 0; k < 8; k++) plan.push([9600 + k * 305, () => { if (this.cal) this.cal.mv = k < 4 ? [k % 2 ? 0 : 5.5, 0] : [0, k % 2 ? 0 : 5.5]; }]);
-      // dead band: back to the centre from below and from above, twice per servo (250 ms swing, 600 ms rest)
-      let tt = 9600 + 8 * 305; plan.push([tt, () => this.out("CAL STEP deadband")]);
-      for (let s = 0; s < 2; s++) for (let k = 0; k < 8; k++) {
-        const v = k % 2 ? 0 : (k % 4 === 0 ? -3.6 : 3.6);
-        plan.push([tt, () => { if (this.cal) this.cal.mv = s ? [0, v] : [v, 0]; }]); tt += k % 2 ? 600 : 250;
-      }
-      plan.push([tt, () => {
-        this.cal = null; this.resetCtl();
-        Object.assign(c, { axes: "-X+Y-Z", swap: 1, dirp: -1, dirr: 1, usdegp: 11.02, usdegr: 11.06, lvlp: 0, lvlr: 0, sdelay: 6.1, stau: 22.0, sdb: 10.4, dbcomp: 2.6, mode: "stab" }); c.cal = (c.cal | 5) & ~2;
-        this.out('CAL DONE auto {"axes":"-X+Y-Z","swap":1,"dirp":-1,"dirr":1,"usdegp":11.02,"usdegr":11.06,"gyrop":13.4,"gyror":13.6,"accp":-13.6,"accr":13.6,"align":0.99,"bias":[1.20,-0.80,0.50],"levelreset":1,"sdelay":6.1,"stau":22.0,"tsteps":8,"sdbp":10.3,"sdbr":10.5,"sdb":10.4,"dbcomp":2.6}'); this.out(this.cfgLine());
-        this.out(`EV ${this.now()} Zona mati servo: atas-bawah 10 us, kanan-kiri 11 us (dipakai 10 us)`);
-      }]);
-      plan.forEach(([t, f]) => setTimeout(f, t));
-    }
   }
   close() { clearInterval(this.timer); if (this.onClose) this.onClose(); }
 }
@@ -1096,8 +1094,12 @@ function onTel(line) {
   S.lastT = d; S.tel.push(d); while (S.tel.length && t - S.tel[0].t > 10000) S.tel.shift();
   if (S.rec) { S.rec.rows.push(line); if (Date.now() - S.rec.t0 > 30000) stopRec(); }
   // body attitude = camera attitude minus what the servos added
-  const bp = d.p - NOMINAL - d.op, br = d.r - d.or;
-  if (window.Twin) window.Twin.update(bp, br, d.op, d.or);
+  // The model's camera looks 35 deg down with the servos centred (Fusion model). CAL twin measures where
+  // the real camera points then (twinp/twinr); the difference is shown as the horn mounted that much
+  // further round, so model body, servos and camera all match the real gimbal.
+  const twP = Number.isFinite(+S.cfg.twinp) ? +S.cfg.twinp : NOMINAL, twR = Number.isFinite(+S.cfg.twinr) ? +S.cfg.twinr : 0;
+  const bp = d.p - twP - d.op, br = d.r - twR - d.or;
+  if (window.Twin) window.Twin.update(bp, br, d.op + (twP - NOMINAL), d.or + twR);
   queueDraw();
 }
 let drawPending = false, lastExplain = 0;
@@ -1112,9 +1114,32 @@ function drawAll() {
   const diff = (el, e) => { const ok = Math.abs(e) < 0.3; el.textContent = stab ? (ok ? "tepat" : `${signed(e)}°`) : ""; el.className = "d num " + (stab ? (ok ? "good" : Math.abs(e) > 2 ? "off" : "") : ""); };
   diff($("#rPitchDiff"), eP); diff($("#rRollDiff"), eR);
   const now = performance.now();
-  if (now - lastExplain > 300) { lastExplain = now; explain(d); }
+  if (now - lastExplain > 300) { lastExplain = now; explain(d); convText(d); }
   if ($("#t-kontrol").classList.contains("on")) drawLive();
 }
+// Angle units: the firmware turns "servo degrees" into a pulse with usdeg (us per degree):
+//   pulse = 1500 + trim + dir * angle * usdeg.   An MG90S turns its shaft ~1 deg per 11.1 us (500..2500 us = 180 deg).
+// With the right usdeg, 1 servo degree in the app = 1 degree of camera turn. CAL twin gives the camera
+// angle at the servo centre, so in Manual mode the real ratio camera/servo can be measured directly.
+const MG90S_US_PER_DEG = 11.1;
+function convText(d) {
+  const c = S.cfg, u = +c.usdegp || 11, us = d.op * u, shaft = us / MG90S_US_PER_DEG;
+  const lo = Math.max(-(+c.limp || 16), Number.isFinite(+c.limpmin) ? +c.limpmin : -16), hi = Math.min(+c.limp || 16, Number.isFinite(+c.limpmax) ? +c.limpmax : 16);
+  let t = `Atas-bawah sekarang ${signed(d.op)}° = ${signed(us)} µs dari tengah ≈ ${signed(shaft)}° putaran poros servo (MG90S ${fmt(MG90S_US_PER_DEG, 1)} µs per derajat poros). `
+    + `Batas ${fmt(hi)}° menunduk = ${fmt(hi * u, 0)} µs ≈ ${fmt(hi * u / MG90S_US_PER_DEG)}° poros; ${fmt(-lo)}° mendongak = ${fmt(-lo * u, 0)} µs. Positif = menunduk.`;
+  S.convUs = null;
+  if ((c.cal & 8) && d.mode === 2 && Math.abs(d.op) >= 4) {
+    const cam = d.p - (+c.twinp), r = cam / d.op;
+    if (r > 0.2 && r < 5) {
+      t += ` Diukur sekarang: kamera berputar ${fmt(cam)}° untuk ${fmt(d.op)}° servo (×${fmt(r, 2)}).`;
+      if (Math.abs(r - 1) > 0.08) { S.convUs = Math.round(u / r * 10) / 10; t += ` µs per derajat yang cocok: ${fmt(S.convUs, 1)} (sekarang ${fmt(u, 1)}).`; }
+      else t += " Skala sudah tepat.";
+    }
+  } else if (!(c.cal & 8)) t += " Samakan model 3D dulu (langkah 3) untuk mengukur skala sebenarnya di mode Manual.";
+  else if (d.mode !== 2) t += " Untuk mengukur skala: pilih Manual, tegakkan badan, geser servo atas-bawah ke 5–15° menunduk.";
+  $("#convTxt").textContent = t; $("#convFix").hidden = !S.convUs;
+}
+$("#convUse").onclick = () => { if (S.convUs) send(`SET usdegp ${S.convUs}`); };
 function explain(d) {
   const tP = $("#tagP b"), tR = $("#tagR b");
   if (d.mode === 1) { tP.textContent = tR.textContent = "tengah"; }
@@ -1123,7 +1148,6 @@ function explain(d) {
   let w = "";
   if (!(d.flags & 1)) w = "MPU6050 tidak terbaca. Periksa keempat kabel sensor.";
   else if (d.mode === 0 && (d.flags & 24)) w = ((d.flags & 8) && (d.flags & 16) ? "Kedua servo" : (d.flags & 8) ? "Servo atas-bawah di batas ±" + fmt(+S.cfg.limp || 50, 0) + "°" : "Servo kanan-kiri di batas ±" + fmt(+S.cfg.limr || 50, 0) + "°") + (d.flags & 8 && d.flags & 16 ? " di batas geraknya" : "") + ". Badan terlalu miring.";
-  else if (d.mode === 0 && S.cfg.cal !== undefined && !(+S.cfg.cal & 1)) w = "Belum dikalibrasi: Stabil memakai setelan aman.";
   else if (d.mode === 1) w = "Mode Tengah: servo diam.";
   $("#chWarn").textContent = w; $("#chWarn").hidden = !w;
   $("#chWalk").hidden = !!w || !(d.flags & 128);
@@ -1163,7 +1187,9 @@ function applyCfg(c) {
   S.cfg = c;
   $$("[data-key]").forEach((el) => { const k = el.dataset.key; if (!(k in c) || S.dragging.has(el) || document.activeElement === el) return; if (el.type === "checkbox") el.checked = !!c[k]; else el.value = c[k]; if (el.type === "range") showVal(k, c[k]); });
   // manual sliders reach exactly the movement limits set under Perangkat (kanan-kiri up to 50 deg)
-  [["#manP", +c.limp || 25], ["#manR", +c.limr || 25]].forEach(([id, l]) => { const el = $(id); el.min = -l; el.max = l; });
+  const lp = +c.limp || 16, lr = +c.limr || 25;
+  const pLo = Math.max(-lp, Number.isFinite(+c.limpmin) ? +c.limpmin : -lp), pHi = Math.min(lp, Number.isFinite(+c.limpmax) ? +c.limpmax : lp);
+  [["#manP", pLo, pHi], ["#manR", -lr, lr]].forEach(([id, lo, hi]) => { const el = $(id); el.min = lo; el.max = hi; });
   if (!S.dragging.has($("#pitchSlider"))) $("#pitchSlider").value = c.pitch;
   $("#pitchSetTxt").textContent = fmt(c.pitch) + "°";
   $$("#presets button").forEach((b) => b.setAttribute("aria-pressed", Math.abs(+b.dataset.p - c.pitch) < 0.01));
@@ -1177,18 +1203,20 @@ function applyCfg(c) {
   $("#manualBlk").hidden = c.mode !== "manual";
   $("#lvlrTxt").textContent = fmt(c.lvlr, 2) + "°"; $("#lvlpTxt").textContent = fmt(c.lvlp, 2) + "°";
   $("#trimpTxt").textContent = c.trimp + " µs"; $("#trimrTxt").textContent = c.trimr + " µs";
-  $("#calAutoLi").classList.toggle("done", !!(c.cal & 1)); $("#calLevelLi").classList.toggle("done", !!(c.cal & 2)); $("#calGyroLi").classList.toggle("done", !!(c.cal & 4));
+  spdWarn(+c.maxrate); $("#calLevelLi").classList.toggle("done", !!(c.cal & 2)); $("#calGyroLi").classList.toggle("done", !!(c.cal & 4)); $("#calTwinLi").classList.toggle("done", !!(c.cal & 8));
   if (document.activeElement !== $("#nameIn")) $("#nameIn").value = c.name || "";
   $("#pinWarn").textContent = c.defpin ? "Sandi masih bawaan (123456). Gantilah agar orang lain di hotspot yang sama tidak dapat mengendalikan gimbal Anda." : "Diminta setiap kali ponsel atau iPad terhubung.";
   $("#pinWarn").style.color = c.defpin ? "var(--warn)" : "";
-  if (!(c.cal & 1) && !S.calHintShown) { S.calHintShown = true; toast("Gimbal belum dikalibrasi. Buka menu Kalibrasi.", "warn"); }
 }
+// fast servo speeds wear the MG90S out: the warning shows while it is above 200 deg/s
+const SPEED_WARN = 200;
+function spdWarn(v) { $("#spdWarn").hidden = !(v > SPEED_WARN); }
 const sendTimers = {};
 function sendSet(key, v, delay = 160) { clearTimeout(sendTimers[key]); sendTimers[key] = setTimeout(() => send(`SET ${key} ${v}`), delay); }
 function trackDrag(el) { el.addEventListener("pointerdown", () => S.dragging.add(el)); el.addEventListener("pointerup", () => setTimeout(() => S.dragging.delete(el), 400)); }
 $$("[data-key]").forEach((el) => {
   const k = el.dataset.key;
-  if (el.type === "range") { trackDrag(el); el.addEventListener("input", () => { showVal(k, +el.value); sendSet(k, el.value); }); }
+  if (el.type === "range") { trackDrag(el); el.addEventListener("input", () => { showVal(k, +el.value); sendSet(k, el.value); if (k === "maxrate") { const was = !$("#spdWarn").hidden; spdWarn(+el.value); if (!was && +el.value > SPEED_WARN) toast("Kecepatan servo di atas 200°/s: servo cepat panas dan aus", "warn"); } }); }
   else if (el.type === "checkbox") el.addEventListener("change", () => send(`SET ${k} ${el.checked ? 1 : 0}`));
   else el.addEventListener("change", () => send(`SET ${k} ${el.value.trim()}`));
 });
@@ -1211,8 +1239,8 @@ $$("[data-nudge]").forEach((b) => b.addEventListener("click", () => { const k = 
 // ======================================================================== calibration
 function onCal(rest) {
   const [what, kind, ...more] = rest.split(" "), tail = more.join(" ");
-  const box = { auto: "#calAutoOut", gyro: "#calGyroOut", level: "#calLevelOut" };
-  const show = (k, html, cls) => { const b = $(box[k] || "#calAutoOut"); b.hidden = false; b.className = "progress " + (cls || ""); b.innerHTML = html; };
+  const box = { gyro: "#calGyroOut", level: "#calLevelOut", twin: "#calTwinOut" };
+  const show = (k, html, cls) => { const b = $(box[k] || "#calLevelOut"); b.hidden = false; b.className = "progress " + (cls || ""); b.innerHTML = html; };
   if (what === "START") { S.calKind = kind; show(kind, kind === "auto" ? "Langkah 1 dari 5: mengukur gyro dan arah gravitasi. Jangan disentuh…" : kind === "gyro" ? "Mengukur gyro selama 2 detik…" : "Mengukur sudut…"); return; }
   if (what === "STEP" && kind === "wait") { show(S.calKind || "auto", `Gimbal belum diam (getar gyro ${fmt(+more[0], 1)}°/s). Lepas tangan dan jangan disentuh, mengukur ulang…`); return; }
   if (what === "STEP" && /^servo[34]$/.test(kind) && more[0] === "move" && more[1] !== undefined) { show("auto", `Servo di GPIO${kind.slice(5)} hanya bergerak ${fmt(+more[1], 1)}°. Mencoba arah lain atau gerakan lebih besar…`); return; }
@@ -1221,13 +1249,14 @@ function onCal(rest) {
     const j = parseJson(tail) || {};
     if (kind === "auto") { show("auto", `Selesai. Sumbu MPU6050 <b>${j.axes}</b>, kabel servo ${j.swap ? "<b>tertukar, sudah dibetulkan otomatis</b>" : "benar"}, skala servo ${fmt(j.usdegp, 2)} dan ${fmt(j.usdegr, 2)} µs per derajat${j.stau ? `, servo bereaksi setelah ${fmt(j.sdelay, 0)} ms dan sampai dalam ${fmt(j.stau, 0)} ms` : ""}${j.sdb ? `, zona mati servo ${fmt(j.sdbp, 0)} dan ${fmt(j.sdbr, 0)} µs` : ""}.${j.levelreset ? " Lanjutkan ke kalibrasi datar." : ""}`, "ok"); chime(true); toast("Kalibrasi otomatis selesai", "ok"); }
     else if (kind === "gyro") show("gyro", `Selesai. Derau ${fmt(j.noise, 3)}°/s.`, "ok");
+    else if (kind === "twin") { show("twin", `Selesai. Saat servo di tengah kamera menghadap ${fmt(j.twinp)}° (${j.twinp >= 0 ? "menunduk" : "mendongak"}) dan miring ${fmt(j.twinr)}°. Model 3D kini mengikuti gimbal Anda.`, "ok"); toast("Model 3D disamakan", "ok"); }
     else if (kind === "level") show("level", `Selesai. Koreksi atas-bawah ${fmt(j.lvlp, 2)}°, kanan-kiri ${fmt(j.lvlr, 2)}°.`, "ok");
     send("GET"); return;
   }
   if (what === "FAIL") { show(kind, "Gagal: " + tail, "bad"); toast("Kalibrasi gagal", "bad"); }
 }
-$("#calAuto").onclick = () => send("CAL auto");
 $("#calGyro").onclick = () => send("CAL gyro");
+$("#calTwin").onclick = () => send("CAL twin");
 $("#calLevel").onclick = () => {
   const useP = $("#lvlUseP").checked, useR = $("#lvlUseR").checked, p = $("#lvlPIn").value.replace(",", "."), r = $("#lvlRIn").value.replace(",", ".");
   if (useP && p === "") { toast("Isi sudut atas-bawah yang terbaca, atau hilangkan centang Gunakan sudut atas-bawah", "warn"); return; }
@@ -1261,7 +1290,7 @@ $("#stepP").onclick = () => send("STEP p 5");
 $("#stepR").onclick = () => send("STEP r 5");
 $("#stepCsv").onclick = () => { const c = S.lastCap; if (!c) return; download(`uji_respons_${c.axis}_${Date.now()}.csv`, "i,t_ms,target_atas_bawah,atas_bawah,target_kanan_kiri,kanan_kiri,servo_atas_bawah,servo_kanan_kiri\n" + c.rows.map((r) => [r[0], r[1], ...r.slice(2).map((v) => (v / 100).toFixed(2))].join(",")).join("\n")); };
 $("#defTuning").onclick = () => { if (confirm("Kembalikan PID dan kehalusan ke nilai bawaan? Kalibrasi tetap.")) send("DEFAULTS tuning"); };
-$("#defAll").onclick = () => { if (confirm("Kembalikan SEMUA pengaturan, termasuk kalibrasi? Setelah ini jalankan kalibrasi otomatis lagi.")) send("DEFAULTS all"); };
+$("#defAll").onclick = () => { if (confirm("Kembalikan SEMUA pengaturan, termasuk arah dan kabel servo? Setelah ini periksa lagi bagian Servo di menu Kalibrasi.")) send("DEFAULTS all"); };
 
 // ======================================================================== diagnostics
 const RST = { poweron: "daya baru dinyalakan", software: "dinyalakan ulang lewat perintah", crash: "galat program (crash)", watchdog: "program macet (watchdog)", brownout: "tegangan turun", deepsleep: "bangun dari mode tidur", external: "tombol reset", other: "lainnya" };

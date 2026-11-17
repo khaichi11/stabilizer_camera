@@ -180,7 +180,7 @@ Skema yang sama tersedia di aplikasi, menu **Perangkat**.
 
    Satu pin 5V dan satu pin G cukup untuk semuanya. Kabel merah kedua servo disatukan terlebih dahulu (sambungan Y yang dibungkus selongsong bakar), lalu satu ujungnya disolder ke 5V. Kabel cokelat kedua servo dan GND IMU disatukan dengan cara yang sama ke G.
 
-   GPIO3 dan GPIO4 yang tertukar, atau IMU yang terpasang terbalik, tidak menjadi masalah. Kalibrasi otomatis di aplikasi akan mendeteksi dan memperbaikinya.
+   GPIO3 dan GPIO4 yang tertukar, atau IMU yang terpasang terbalik, tidak menjadi masalah. Atur saja di aplikasi, menu Kalibrasi → Servo (Kabel servo, Sumbu MPU6050).
 5. Bungkus setiap sambungan dengan selongsong bakar.
 
 | Pin ESP32-C3 | Tersambung ke |
@@ -205,8 +205,8 @@ Skema yang sama tersedia di aplikasi, menu **Perangkat**.
 ## Uji bertahap
 1. **Unggah firmware** (lihat bagian Firmware), lalu hubungkan aplikasi (lihat bagian Aplikasi).
 2. **Pasang horn pada posisi tengah.** Pilih mode **Tengah** di aplikasi, lalu pasang horn kedua servo sehingga rangka dan kamera lurus. Sisa kemiringan kecil diluruskan melalui menu Kalibrasi, bagian *Posisi tengah servo*.
-3. **Kalibrasi otomatis.** Tegakkan dudukan seperti saat dipakai dengan kamera mengarah ke bawah, lalu biarkan tanpa disentuh selama ±12 detik. Firmware mencari sumbu IMU, kabel servo yang tertukar, arah dan skala servo, serta mengukur kecepatan setiap servo dengan beberapa gerakan kecil yang cepat.
-4. **Kalibrasi datar.** Letakkan waterpass atau ponsel (aplikasi waterpass) di atas D435, masukkan angka yang terbaca, lalu simpan.
+3. **Atur servo (tanpa kalibrasi servo).** Di menu Kalibrasi → Servo, biarkan kecepatan bawaan 60°/s. Pilih mode Stabil lalu miringkan dudukan pelan-pelan: kamera harus melawan kemiringan. Jika malah ikut miring makin jauh, ubah arah servo sumbu itu. Batas atas-bawah bawaan 16° menunduk dan 1° mendongak supaya gigi servo tidak selip. Penjelasan angka sudut ada di README, bagian *Batas servo dan konversi sudut*.
+4. **Kalibrasi datar.** Letakkan waterpass atau ponsel (aplikasi waterpass) di atas D435, masukkan angka yang terbaca, lalu simpan. Setelah itu, dalam mode Tengah dengan badan tegak, tekan **Samakan model 3D** agar digital twin sama dengan gimbal Anda.
 5. **Uji dengan tangan.** Miringkan dudukan perlahan: kamera harus tetap pada sudut target. Grafik di menu Kontrol menunjukkan sisa selisihnya.
 6. **Jika bergetar atau berayun**, turunkan P atau I di menu PID sedikit demi sedikit, lalu jalankan **Uji respons**. Hasil yang baik: kamera mencapai target dalam waktu kurang dari ±150 ms dan melewati target kurang dari ±15%. Jika servo berdengung saat diam, naikkan *Zona mati servo* atau *Dead band*, atau turunkan *Denyut servo* ke 50 Hz.
 7. **Pasang di sabuk dan uji sambil berjalan.** Program depth di komputer dapat membaca baris `T,...` dari USB untuk mengoreksi sisa kemiringan yang tidak sempat dikejar servo.
@@ -249,7 +249,7 @@ Apabila hotspot tidak ditemukan selama 20 detik, WiFi milik gimbal aktif kembali
 | Menu | Isi |
 |---|---|
 | Kontrol | Sudut atas-bawah (25/30/35/40/45° atau nilai bebas 10–60°), sudut kanan-kiri, mode Stabil / Tengah / Manual / Nonaktif, grafik 10 detik |
-| Kalibrasi | Kalibrasi otomatis, kalibrasi datar, kalibrasi gyro, posisi tengah servo, pengaturan servo lanjutan |
+| Kalibrasi | Pengaturan servo (kecepatan, arah, kabel, skala, batas, konversi sudut), kalibrasi datar, kalibrasi gyro, samakan model 3D, posisi tengah servo |
 | PID | P, I, D, peredaman gerak badan, prediksi, jeda dan waktu tanggap servo, zona mati servo, kompensasi zona mati, dead band, penghalus, kecepatan servo, denyut servo, filter akselerometer, filter sensor, uji respons dan CSV |
 | Diagnostik | Status perangkat, penyebab mulai ulang, log kejadian, laporan debug, perekaman 30 detik, terminal perintah |
 | Perangkat | Skema rangkaian, WiFi, sandi, nama gimbal (sekaligus alamatnya), mode saat dinyalakan, LED, bunyi |
@@ -276,7 +276,7 @@ Gimbal dua sumbu tidak dapat meredam putaran mendatar (*yaw*) kamera yang terjad
 | `SET pitch 30` | Mengatur sudut atas-bawah 30° (semua pengaturan lain juga melalui `SET`) |
 | `SET pwmhz 50` | Mengatur denyut servo (50–333 Hz) |
 | `MODE stab` / `center` / `manual` / `off` | Memilih mode |
-| `CAL auto` / `CAL gyro` / `CAL level 35.0 0` | Kalibrasi |
+| `CAL gyro` / `CAL level 35.0 0` / `CAL twin` | Kalibrasi gyro, datar, dan model 3D |
 | `STEP p 5` | Uji respons sudut atas-bawah 5° |
 | `GET` / `STATUS` / `EVLOG` | Menampilkan pengaturan, status, dan log kejadian |
 | `WIFI` / `WIFI SCAN` | Status WiFi / mencari hotspot |
