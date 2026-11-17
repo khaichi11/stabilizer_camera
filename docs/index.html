@@ -364,7 +364,7 @@ body.demo .demochip{display:inline-block}
           <label class="field"><span>µs per derajat, servo putar atas-bawah</span><input type="number" step="0.1" min="5" max="20" data-key="usdegp"></label>
           <label class="field"><span>µs per derajat, servo putar kanan-kiri</span><input type="number" step="0.1" min="5" max="20" data-key="usdegr"></label>
           <label class="field"><span>Batas gerak atas-bawah (±°)</span><input type="number" step="0.5" min="3" max="60" data-key="limp"></label>
-          <label class="field"><span>Batas gerak kanan-kiri (±°)</span><input type="number" step="0.5" min="3" max="50" data-key="limr"></label>
+          <label class="field"><span>Batas gerak kanan-kiri (±°)</span><input type="number" step="0.5" min="3" max="60" data-key="limr"></label>
           <label class="field"><span>Kabel servo</span><select data-key="swap"><option value="0">GPIO3 atas-bawah, GPIO4 kanan-kiri</option><option value="1">Tertukar (GPIO3 kanan-kiri)</option></select></label>
           <label class="field"><span>Sumbu MPU6050 (maju, kiri, atas)</span><input type="text" data-key="axes" placeholder="+X+Y+Z" maxlength="6"></label>
         </div>
@@ -396,7 +396,8 @@ body.demo .demochip{display:inline-block}
       </div>
       <div class="card">
         <div class="field"><div class="t2"><span>Dead band</span><span class="val" data-show="db"></span></div><input type="range" data-key="db" min="0" max="1.5" step="0.05"><p>Mencegah servo berdengung.</p></div>
-        <div class="field"><div class="t2"><span>Penghalus gerak servo</span><span class="val" data-show="smooth"></span></div><input type="range" data-key="smooth" min="0" max="0.2" step="0.005"><p>Makin halus, makin lambat.</p></div>
+        <div class="field"><div class="t2"><span>Kehalusan pindah target</span><span class="val" data-show="soft"></span></div><input type="range" data-key="soft" min="0" max="1" step="0.05"><p>Saat target atau mode diganti, kamera meluncur pelan ke sudut baru (0 = langsung). Stabilisasinya tetap cepat.</p></div>
+<div class="field"><div class="t2"><span>Penghalus gerak servo</span><span class="val" data-show="smooth"></span></div><input type="range" data-key="smooth" min="0" max="0.2" step="0.005"><p>Makin halus, makin lambat.</p></div>
         <div class="field"><div class="t2"><span>Kecepatan servo maksimal</span><span class="val" data-show="maxrate"></span></div><input type="range" data-key="maxrate" min="60" max="800" step="10"><p>Juga membatasi lonjakan arus.</p></div>
         <div class="field"><div class="t2"><span>Kepercayaan akselerometer</span><span class="val" data-show="acctau"></span></div><input type="range" data-key="acctau" min="0.1" max="3" step="0.05"><p>Makin besar, makin tahan guncangan.</p></div>
         <label class="field"><span>Denyut servo</span><select data-key="pwmhz"><option value="50">50 Hz, kalau servo panas atau berdengung</option><option value="100">100 Hz (bawaan)</option><option value="150">150 Hz</option><option value="200">200 Hz</option><option value="333">333 Hz, khusus servo digital</option></select></label>
@@ -705,7 +706,7 @@ class SerialLink {
 //  - the servo bought for it (MG90S compatible): reads a new pulse once per frame (100 Hz), dead band width
 //    10 us (does nothing within 5 us of its position), 25 ms lag, 545 deg/s (0.11 s/60 deg)
 //  - MPU6050: 4.8 ms filter delay, plus the small error walking leaves in the angle estimate
-const DEMO_TUNING = { kp: 0.6, gain: 10, ff: 0.8, db: 0.2, smooth: 0.02, maxrate: 400, acctau: 0.6, acctauw: 3, ffb: 1, pred: 1.1, sdb: 10, dbcomp: 2.5, dlpf: 3, pwmhz: 100, gait: 1 };
+const DEMO_TUNING = { kp: 0.6, gain: 10, ff: 0.8, db: 0.2, smooth: 0.02, maxrate: 400, acctau: 0.6, acctauw: 3, ffb: 1, pred: 1.1, sdb: 10, dbcomp: 2.5, dlpf: 3, pwmhz: 100, gait: 1, soft: 0.5 };
 const SRV_US_TRUE = 11.0, SRV_DB_US = 10, SRV_TAU = 0.025, SRV_VMAX = 545;
 const GAIT_K = 12;
 const clampN = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -716,7 +717,7 @@ class DemoLink {
   get name() { return "Gimbal D435 (demo)"; }
   async open() {
     this.pin = "123456"; this.authed = true; this.nonce = "";   // a simulation has nothing to protect: no PIN
-    this.cfg = { pitch: 0, roll: 0, ...DEMO_TUNING, autobias: 1, bootgyro: 1, nod: 1, trimp: 0, trimr: 0, dirp: 1, dirr: 1, swap: 0, usdegp: 10.5, usdegr: 10.5, limp: 50, limr: 50, lvlp: 0, lvlr: 0, axes: "+X+Y+Z", tel: 20, led: 1, startmode: 0, name: "Gimbal D435", cal: 4, defpin: 1, mode: "center", sdelay: 15, stau: 25 };
+    this.cfg = { pitch: 0, roll: 0, ...DEMO_TUNING, autobias: 1, bootgyro: 1, nod: 1, trimp: 0, trimr: 0, dirp: 1, dirr: 1, swap: 0, usdegp: 10.5, usdegr: 10.5, limp: 50, limr: 55, lvlp: 0, lvlr: 0, axes: "+X+Y+Z", tel: 20, led: 1, startmode: 0, name: "Gimbal D435", cal: 4, defpin: 1, mode: "center", sdelay: 15, stau: 25 };
     this.ax = [this.newAxis(), this.newAxis()];   // [pitch, roll]
     this.ms = 0; this.n = 0; this.wall = performance.now(); this.man = [0, 0]; this.stepOff = [0, 0]; this.stepRun = null;
     this.gp = 0; this.gj = 0; this.b = this.body(0); this.resetGait();

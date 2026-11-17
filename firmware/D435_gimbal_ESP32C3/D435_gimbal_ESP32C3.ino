@@ -88,6 +88,9 @@ static const float SRVDB_DEFAULT = 10.0f;  // MG90S as sold: "dead band width 10
 static const uint16_t PWMHZ_DEFAULT = 100;  // fine for analog servos like MG90S; 50 if one runs hot, up to 333 for digital servos
 static const float SMOOTH_DEFAULT = 0.02f;
 static const float GAIT_DEFAULT = 1.0f;
+// Smoothness: how gently a new target (preset, slider, switching to Stabil) is approached. Only the
+// target glides; the stabilisation itself stays as fast as before.
+static const float SOFT_DEFAULT = 0.5f;
 static const char *DEFAULT_NAME = "Gimbal D435";
 static const char *DEFAULT_AP_PASS = "gimbald435";
 static const int WS_N = 3;    // phones/tablets connected at the same time
@@ -132,6 +135,30 @@ struct Config {
   char apPass[33];    // the gimbal's own WiFi (8..32)
   // v4.2
   float gait;  // 0..1: use the learned walking pattern to turn before each step (0 = straight-line only)
+  // v4.3
+  float soft;  // 0..1: smoothness. A new target glides there instead of jumping (0 = jump)
+  uint32_t crc;
+};
+struct ConfigV42 {  // firmware 4.2 layout, read once and upgraded
+  uint32_t magic;
+  uint16_t size;
+  uint16_t calOK;
+  float pitchSet, rollSet;
+  float kp, gain, rateFF, deadband, smooth, maxRate, accTau;
+  uint8_t dlpf, autoBias, bootGyro, nod;
+  int16_t trimP, trimR;
+  int8_t dirP, dirR, swapServo, startMode;
+  float usDegP, usDegR, limP, limR;
+  int8_t axF, axL, axU, sgF, sgL, sgU, telHz, ledOn;
+  float lvlP, lvlR;
+  float bias[3];
+  char name[24];
+  char pin[16];
+  float ffBody, pred, srvDelay, srvTau, accTauW, dbComp, srvDb;
+  uint16_t pwmHz;
+  uint8_t wifiOn, pad41;
+  char wifiSsid[33], wifiPass[65], apPass[33];
+  float gait;
   uint32_t crc;
 };
 struct ConfigV41 {  // firmware 4.1 layout, read once and upgraded
@@ -209,7 +236,7 @@ struct Cal {
   uint8_t retry = 0;  // stillness retries (servos holding the camera hum a little)
   float amp = CAL_DUS;                      // move being tried now (us, signed)
   float ampOf[2] = { CAL_DUS, CAL_DUS };    // move that was used for each servo
-  float mTry[3] = { 0, 0, 0 }, mMax[2] = { 0, 0 };
+  float mTry[3] = { 0, 0, 0 }, mMax[2] = { 0, 0 }, mAcc[2] = { 0, 0 };
   uint8_t tryN = 0;
   bool redo = false;
 } cal;
@@ -301,6 +328,8 @@ float cmdP = 0, cmdR = 0;    // PID integrator (deg of camera rotation)
 float ffP = 0, ffR = 0;      // body feed-forward part of the output
 float lastTgtP = 0, lastTgtR = 0;
 float slewP = 0, slewR = 0;  // after slew limit
+float glP = 0, glR = 0, glVP = 0, glVR = 0;  // target as it glides (deg, deg/s)
+bool glInit = false;
 float outP = 0, outR = 0;    // after smoothing
 float manP = 0, manR = 0;    // manual mode targets
 float usP = 1500, usR = 1500;
@@ -343,6 +372,7 @@ float wrap180(float a) {
 bool safeTune() {
   return !(cfg.calOK & 1);
 }
+
 float softDB(float e, float db) {  // dead band without a step at its edge
   if (e > db) return e - db;
   if (e < -db) return e + db;
@@ -462,7 +492,7 @@ void cfgDefaults(Config &c, bool keepIdentity) {
   c.usDegP = 10.5f;
   c.usDegR = 10.5f;
   c.limP = 50.0f;  // atas-bawah may move +-50 deg to bring the camera back when the body leans (v4.2: 25)
-  c.limR = 50.0f;  // kanan-kiri: full 50 deg (v4.2: 25)
+  c.limR = 55.0f;  // kanan-kiri: a 50 deg lean is still corrected, with a little to spare (v4.2: 25)
   c.axF = 0;
   c.axL = 1;
   c.axU = 2;
@@ -480,6 +510,7 @@ void cfgDefaults(Config &c, bool keepIdentity) {
   c.srvDb = SRVDB_DEFAULT;
   c.pwmHz = PWMHZ_DEFAULT;
   c.gait = GAIT_DEFAULT;
+  c.soft = SOFT_DEFAULT;
   c.wifiOn = 1;
   strcpy(c.apPass, DEFAULT_AP_PASS);
   if (keepIdentity) {  // name, PIN and WiFi stay, so "back to defaults" does not cut the connection
@@ -526,6 +557,21 @@ bool cfgLoad() {
     memcpy(&t, &o, offsetof(ConfigV41, crc));
     t.size = sizeof(Config);
     cfgMigrated = "4.1";
+  } else if (len == sizeof(ConfigV42)) {  // firmware 4.2: same layout up to its crc
+    ConfigV42 o;
+    prefs.getBytes("cfg", &o, sizeof(o));
+    if (o.magic != CFG_MAGIC || o.size != sizeof(ConfigV42)) return false;
+    if (o.crc != crc32((const uint8_t *)&o, offsetof(ConfigV42, crc))) return false;
+    memset(&t, 0, sizeof(t));
+    cfgDefaults(t, false);
+    memcpy(&t, &o, offsetof(ConfigV42, crc));
+    t.size = sizeof(Config);
+    t.soft = SOFT_DEFAULT;
+    // 4.3 is a handheld stabiliser by default: straight ahead, wide limits (4.2: 35 deg down, +-25)
+    t.pitchSet = 0.0f;
+    t.limP = fmaxf(t.limP, 50.0f);
+    t.limR = fmaxf(t.limR, 55.0f);
+    cfgMigrated = "4.2";
   } else {
     return false;
   }
@@ -541,6 +587,7 @@ bool cfgLoad() {
   t.dbComp = clampf(t.dbComp, 0.0f, 10.0f);
   t.srvDb = clampf(t.srvDb, 0.0f, 40.0f);
   t.gait = clampf(t.gait, 0.0f, 1.0f);
+  t.soft = clampf(t.soft, 0.0f, 1.0f);
   if (t.pwmHz < 50 || t.pwmHz > 333) t.pwmHz = PWMHZ_DEFAULT;
   t.wifiSsid[sizeof(t.wifiSsid) - 1] = t.wifiPass[sizeof(t.wifiPass) - 1] = t.apPass[sizeof(t.apPass) - 1] = 0;
   if (strlen(t.apPass) < 8) strcpy(t.apPass, DEFAULT_AP_PASS);
@@ -955,6 +1002,7 @@ void srvModelStep(SrvModel &s, float out, float usDeg, float dt) {
 }
 void controlReset() {
   cmdP = cmdR = slewP = slewR = outP = outR = ffP = ffR = lastTgtP = lastTgtR = 0;
+  glInit = false;
   srvModelReset(mdlP, 0);
   srvModelReset(mdlR, 0);
   dbcP = DbComp();
@@ -1173,8 +1221,11 @@ void calAutoSolve() {
     cfg.sgF = osF;
     cfg.sgL = osL;
     cfg.sgU = osU;
-    static char msg[128];
-    snprintf(msg, sizeof(msg), "Gerak servo tidak wajar: atas-bawah %.1f, kanan-kiri %.1f derajat. Horn tersangkut atau daya kurang?", dTh, dPh);
+    static char msg[220];
+    snprintf(msg, sizeof(msg),
+             "Gerak servo tidak wajar: atas-bawah %.1f (gyro %.1f), kanan-kiri %.1f (gyro %.1f) derajat untuk %.0f/%.0f us. "
+             "Servo tertahan, horn slip, atau beban kamera tidak seimbang di porosnya?",
+             dTh, m[pitchS], dPh, m[rollS], fabsf(aP), fabsf(aR));
     calFail(msg);
     return;
   }
@@ -1371,7 +1422,20 @@ void calUpdate(float dt) {
       }
       if (el >= 800) {
         for (int k = 0; k < 3; k++) cal.aAfter[cal.servo][k] = cal.a[k] / cal.n;
-        float m = vnorm(cal.rot[cal.servo]);
+        // How far it really went: the gyro sees the turn, the accelerometer where the camera ended up. A
+        // servo that cannot hold the D435 turns and then sags back, so the smaller of the two counts.
+        // (The gravity change is smaller than the turn when the axis is not level: divide by sin.)
+        float mg = vnorm(cal.rot[cal.servo]), m = mg;
+        if (mg > 0.5f) {
+          float nb = vnorm(cal.aBefore[cal.servo]), na = vnorm(cal.aAfter[cal.servo]);
+          if (nb > 0.5f && na > 0.5f) {
+            float cg = clampf(vdot(cal.aBefore[cal.servo], cal.aAfter[cal.servo]) / (nb * na), -1.0f, 1.0f);
+            float ax = fabsf(vdot(cal.rot[cal.servo], cal.up)) / mg;
+            float acc = acosf(cg) * RAD_TO_DEG / sqrtf(fmaxf(1.0f - ax * ax, 0.1f));
+            m = fminf(mg, acc);
+          }
+        }
+        cal.mAcc[cal.servo] = m;
         cal.mTry[cal.tryN] = m;
         cal.mMax[cal.servo] = fmaxf(cal.mMax[cal.servo], m);
         cal.ampOf[cal.servo] = cal.amp;
@@ -1544,7 +1608,28 @@ void control(float dt) {
     nodOffset = 0;
   }
   if (mode == MODE_STAB && imuOK && cal.kind == CAL_IDLE) {
-    float spP = cfg.pitchSet + nodOffset + stepOffP, spR = cfg.rollSet + stepOffR;
+    // Target glide: a new target (preset, slider, switching to Stabil) is approached along a smooth,
+    // critically damped path from where the camera points, instead of a jump. The step test offset is
+    // added after it, so the measured response stays the bare loop.
+    float userP = cfg.pitchSet + nodOffset, userR = cfg.rollSet;
+    if (!glInit) {
+      glP = pitchMeas;
+      glR = rollMeas;
+      glVP = glVR = 0;
+      glInit = true;
+    }
+    if (cfg.soft > 0.01f) {
+      float wn = 1.0f / (0.06f + 0.5f * cfg.soft);  // soft 0.5: ~0.3 s time constant, ~1 s to settle
+      glVP += (wn * wn * (userP - glP) - 2.0f * wn * glVP) * dt;
+      glVR += (wn * wn * (userR - glR) - 2.0f * wn * glVR) * dt;
+      glP += glVP * dt;
+      glR += glVR * dt;
+    } else {
+      glP = userP;
+      glR = userR;
+      glVP = glVR = 0;
+    }
+    float spP = glP + stepOffP, spR = glR + stepOffR;
     float eP = softDB(spP - pitchMeas, cfg.deadband);
     float eR = softDB(spR - rollMeas, cfg.deadband);
     bool safe = safeTune();
@@ -1576,6 +1661,7 @@ void control(float dt) {
   } else {  // centre / off
     cmdP = cmdR = 0;
   }
+  if (mode != MODE_STAB) glInit = false;
   float rate = cfg.maxRate;
   if ((int32_t)(softStartUntil - millis()) > 0) rate = fminf(rate, 60.0f);
   float step = rate * dt;
@@ -2189,12 +2275,12 @@ void sendCfg(uint8_t dest) {
         "\"acctau\":%.2f,\"dlpf\":%u,\"autobias\":%u,\"bootgyro\":%u,\"nod\":%u,\"trimp\":%d,\"trimr\":%d,\"dirp\":%d,"
         "\"dirr\":%d,\"swap\":%d,\"usdegp\":%.2f,\"usdegr\":%.2f,\"limp\":%.1f,\"limr\":%.1f,\"lvlp\":%.2f,\"lvlr\":%.2f,"
         "\"axes\":\"%s\",\"tel\":%d,\"led\":%d,\"startmode\":%d,\"name\":\"%s\",\"cal\":%u,\"defpin\":%d,\"mode\":\"%s\","
-        "\"ffb\":%.2f,\"pred\":%.2f,\"sdelay\":%.1f,\"stau\":%.1f,\"acctauw\":%.2f,\"dbcomp\":%.1f,\"sdb\":%.1f,\"pwmhz\":%u,\"gait\":%.2f}",
+        "\"ffb\":%.2f,\"pred\":%.2f,\"sdelay\":%.1f,\"stau\":%.1f,\"acctauw\":%.2f,\"dbcomp\":%.1f,\"sdb\":%.1f,\"pwmhz\":%u,\"gait\":%.2f,\"soft\":%.2f}",
         cfg.pitchSet, cfg.rollSet, cfg.kp, cfg.gain, cfg.rateFF, cfg.deadband, cfg.smooth, cfg.maxRate, cfg.accTau, cfg.dlpf,
         cfg.autoBias, cfg.bootGyro, cfg.nod, cfg.trimP, cfg.trimR, cfg.dirP, cfg.dirR, cfg.swapServo, cfg.usDegP,
         cfg.usDegR, cfg.limP, cfg.limR, cfg.lvlP, cfg.lvlR, ax, cfg.telHz, cfg.ledOn, cfg.startMode, cfg.name, cfg.calOK,
         strcmp(cfg.pin, DEFAULT_PIN) == 0 ? 1 : 0, MODE_NAMES[mode], cfg.ffBody, cfg.pred, cfg.srvDelay, cfg.srvTau,
-        cfg.accTauW, cfg.dbComp, cfg.srvDb, (unsigned)cfg.pwmHz, cfg.gait);
+        cfg.accTauW, cfg.dbComp, cfg.srvDb, (unsigned)cfg.pwmHz, cfg.gait, cfg.soft);
 }
 void sendStatus(uint8_t dest) {
   sendf(dest,
@@ -2216,7 +2302,7 @@ void sendHelp(uint8_t dest) {
     "HELP GET | STATUS | EVLOG | PING | HELLO",
     "HELP SET <kunci> <nilai>   (pitch roll kp gain ff db smooth maxrate acctau dlpf autobias bootgyro nod",
     "HELP     trimp trimr dirp dirr swap usdegp usdegr limp limr lvlp lvlr axes tel led startmode",
-    "HELP     ffb pred sdelay stau sdb dbcomp acctauw pwmhz gait)",
+    "HELP     ffb pred sdelay stau sdb dbcomp acctauw pwmhz gait soft)",
     "HELP MODE stab|center|manual|off   MAN <atas-bawah> <kanan-kiri>",
     "HELP CAL auto | CAL gyro | CAL level [atas-bawah|x] [kanan-kiri|x] | CAL abort",
     "HELP ACC | ACC off <x> <y> <z> | ACC gain <x> <y> <z> | ACC reset",
@@ -2257,6 +2343,7 @@ bool setParam(const char *key, const char *val, char *err, size_t errLen) {
   F_("dbcomp", dbComp, 0.0f, 60.0f)  // > 10: also covers gear/horn play (backlash) measured on the frame
   F_("sdb", srvDb, 0.0f, 40.0f)
   F_("gait", gait, 0.0f, 1.0f)
+  F_("soft", soft, 0.0f, 1.0f)
   I_("autobias", autoBias, 0, 1)
   I_("bootgyro", bootGyro, 0, 1)
   I_("nod", nod, 0, 1)
@@ -2266,7 +2353,7 @@ bool setParam(const char *key, const char *val, char *err, size_t errLen) {
   F_("usdegp", usDegP, 5.0f, 20.0f)
   F_("usdegr", usDegR, 5.0f, 20.0f)
   F_("limp", limP, 3.0f, 60.0f)
-  F_("limr", limR, 3.0f, 50.0f)
+  F_("limr", limR, 3.0f, 60.0f)
   F_("lvlp", lvlP, -30.0f, 30.0f)
   F_("lvlr", lvlR, -30.0f, 30.0f)
   I_("tel", telHz, 0, 25)
@@ -2435,8 +2522,10 @@ void handleLine(char *line, uint8_t src) {
       manR = outR;
     }
     if (m == MODE_STAB && mode != MODE_STAB) {  // continue smoothly from where the servos are
-      cmdP = (1.0f - cfg.ffBody) * outP;
-      cmdR = (1.0f - cfg.ffBody) * outR;
+      float ffb = safeTune() ? 0.0f : cfg.ffBody;
+      cmdP = (1.0f - ffb) * outP;
+      cmdR = (1.0f - ffb) * outR;
+      glInit = false;  // the target glides from where the camera points now
     }
     mode = (Mode)m;
     if (m == MODE_STAB && !(cfg.calOK & 1)) sendTo(src, "WARN belum dikalibrasi: arah servo/IMU bisa salah. Jalankan CAL auto.");

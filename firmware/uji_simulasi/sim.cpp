@@ -434,7 +434,7 @@ int main() {
   run(2.5);
   show(takeUsb(), "CAL");
   {
-    const char *keys[] = {"kp", "gain", "ff", "smooth", "db", "acctau", "ffb", "pred", "sdelay", "stau", "sdb", "dbcomp", "acctauw", "dlpf", "pwmhz", "gait"};
+    const char *keys[] = {"kp", "gain", "ff", "smooth", "db", "acctau", "ffb", "pred", "sdelay", "stau", "sdb", "dbcomp", "acctauw", "dlpf", "pwmhz", "gait", "soft"};
     for (auto k : keys) {
       std::string env = k; for (auto &c : env) c = toupper(c);
       if (getenv(env.c_str())) { std::string c = std::string("SET ") + k + " " + getenv(env.c_str()); usb(c.c_str()); }
@@ -758,11 +758,11 @@ int main() {
     usb("SET pitch 0");
     usb("SET roll 0");
     run(3.0);
-    // sideways 45 deg both ways, nose up 25, nose down 10, and a mix (leanF < 0 = body leans forward).
+    // sideways 50 deg both ways, nose up 25, nose down 10, and a mix (leanF < 0 = body leans forward).
     // The pitch servo's centre already looks 37 deg down in this frame, so straight ahead needs -37 deg
     // and a forward lean of more than ~13 deg runs into the +-50 deg servo limit.
     struct Pose { double s, f; const char *name; } poses[] = {
-        {45, 0, "miring kanan 45"}, {-45, 0, "miring kiri 45"}, {0, 25, "mendongak 25"}, {0, -10, "menunduk 10"}, {30, 15, "miring 30 + mendongak 15"}};
+        {50, 0, "miring kanan 50"}, {-50, 0, "miring kiri 50"}, {0, 25, "mendongak 25"}, {0, -10, "menunduk 10"}, {30, 15, "miring 30 + mendongak 15"}};
     for (auto &ps : poses) {
       double t0 = t_us * 1e-6, s0 = W.leanS, f0 = W.leanF;
       W.body = [=](double t, World &w) {
