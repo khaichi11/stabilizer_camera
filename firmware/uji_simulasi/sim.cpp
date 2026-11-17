@@ -230,7 +230,9 @@ uint8_t TwoWire::requestFrom(int address, int size) {
     for (int i = 0; i < 3; i++) fw[i] = up[i] + W.accLin[i];
     for (int k = 0; k < 3; k++) {  // specific force in IMU frame = Rimu^T * f
       double v = W.Rimu[0][k] * fw[0] + W.Rimu[1][k] * fw[1] + W.Rimu[2][k] * fw[2];
-      put16(rBuf, (v + 0.004 * nd(rng)) * (16384 >> ((regs[0x1C] >> 3) & 3)));  // LSB per g from ACCEL_CONFIG
+      // ACC_SCALE: clone chips read e.g. 1.07 g at rest
+      static const double accScale = getenv("ACC_SCALE") ? atof(getenv("ACC_SCALE")) : 1.0;
+      put16(rBuf, (v * accScale + 0.004 * nd(rng)) * (16384 >> ((regs[0x1C] >> 3) & 3)));  // LSB per g from ACCEL_CONFIG
     }
     put16(rBuf, 0);  // temperature
     for (int k = 0; k < 3; k++) put16(rBuf, (W.omega[k] + W.gyroBias[k] + 0.05 * nd(rng)) * 32.8);
@@ -384,7 +386,7 @@ int main() {
   std::string o = takeUsb();
   show(o);
   check(imuOK, "IMU detected");
-  check(fabs(pinPulse[3] - 1500) < 2 && fabs(pinPulse[4] - 1500) < 2 && mode == MODE_CENTER, "uncalibrated: servos held at centre");
+  check(mode == MODE_STAB, "starts in Stabil (no servo calibration needed)");
 
   printf("== HELLO / GET / STATUS over USB\n");
   usb("HELLO");
@@ -395,25 +397,52 @@ int main() {
   show(o);
   check(o.find("HELLO {") != std::string::npos && o.find("CFG {") != std::string::npos && o.find("ST {") != std::string::npos, "replies");
 
-  printf("== CAL auto (cables swapped on purpose, IMU chip-down, pitch servo reversed)\n");
+  printf("== manual servo setup (cables swapped on purpose, IMU chip-down, pitch servo reversed)\n");
+  // No servo calibration any more: the user picks wiring, directions, scale and IMU axes in the app.
+  check(fabs(cfg.maxRate - 60) < 0.01 && cfg.srvAcc == 0, "default servo speed is slow: 60 deg/s, no acceleration limit");
+  check(cfg.limPUsDn == 150 && cfg.limPUsUp == -150, "atas-bawah limited to +-150 us from the centre until the user sets the safe range");
+  check(cfg.pred == 0 && cfg.dbComp == 0, "prediction and dead band compensation off by default (they shook the real gimbal)");
+  // This simulated frame mounts the pitch servo 37 deg nose-down, so straight ahead alone needs -37 deg:
+  // the tests below use the old +-50 deg limit. On the real gimbal the horn is set straight in Tengah.
+  usb("SET limp 50");
+  usb("SET limpdn 1000");
+  usb("SET limpup -1000");
+  // The simulated servos have no frame resonance, so the faster tuning used before is tested here.
+  usb("SET pred 1.1");
+  usb("SET dbcomp 2.5");
+  usb("MODE center");
+  usb("SET swap 1");
+  usb("SET axes -X+Y-Z");
+  usb("SET dirp -1");
+  usb("SET dirr 1");
+  {
+    char c1[48], c2[48];
+    snprintf(c1, sizeof c1, "SET usdegp %.2f", W.pitchS.usPerDeg);
+    snprintf(c2, sizeof c2, "SET usdegr %.2f", W.rollS.usPerDeg);
+    usb(c1);
+    usb(c2);
+  }
   usb("CAL auto");
-  run(24.0);
+  run(0.3);
   o = takeUsb();
-  show(o, "CAL");
-  show(o, "EV");
-  check(o.find("CAL DONE auto") != std::string::npos, "auto calibration finished");
-  char ax[8];
-  axesString(ax, cfg.axF, cfg.sgF, cfg.axL, cfg.sgL, cfg.axU, cfg.sgU);
-  check(!strcmp(ax, "-X+Y-Z"), "IMU axes detected as -X+Y-Z");
-  check(cfg.swapServo == 1, "swapped servo cables detected");
-  check(cfg.dirP == -1 && cfg.dirR == 1, "servo directions");
-  printf("   usdeg p %.2f (true %.2f)  r %.2f (true %.2f)\n", cfg.usDegP, W.pitchS.usPerDeg, cfg.usDegR, W.rollS.usPerDeg);
-  check(fabs(cfg.usDegP - W.pitchS.usPerDeg) < 0.5 && fabs(cfg.usDegR - W.rollS.usPerDeg) < 0.5, "servo scale within 0.5 us/deg");
-  printf("   dead band measured: %.1f us (true %.1f, plus gear play)\n", cfg.srvDb, envd("SRV_DB", 10.0));
-  if (!getenv("BACKLASH")) check(fabs(cfg.srvDb - envd("SRV_DB", 10.0)) < 2.5 && fabs(cfg.dbComp - 0.25f * cfg.srvDb) < 0.01, "servo dead band measured within 2.5 us, compensation set from it");
-  printf("   servo timing measured: delay %.1f ms, lag %.1f ms (%d/8 steps)\n", cfg.srvDelay, cfg.srvTau, cal.tCount);
-  check(cal.tCount >= 6 && cfg.srvDelay >= 0 && cfg.srvDelay < 40 && cfg.srvTau > 8 && cfg.srvTau < 2.5 * envd("SRV_TAU", 25.0), "servo delay and lag measured");
-  printf("   bias %.2f %.2f %.2f (true %.2f %.2f %.2f)\n", cfg.bias[0], cfg.bias[1], cfg.bias[2], W.gyroBias[0], W.gyroBias[1], W.gyroBias[2]);
+  check(o.find("ERR kalibrasi servo sudah dihapus") != std::string::npos, "CAL auto is gone and says what to do instead");
+  usb("SET maxrate 300");
+  run(0.2);
+  o = takeUsb();
+  check(o.find("Peringatan: kecepatan servo 300") != std::string::npos, "a fast servo speed (300 deg/s) gives a warning");
+  {
+    // speed and acceleration used by the rest of the tests (default: the slow, gentle setting)
+    char c1[48], c2[48];
+    snprintf(c1, sizeof c1, "SET maxrate %s", getenv("MAXRATE") ? getenv("MAXRATE") : "60");
+    snprintf(c2, sizeof c2, "SET srvacc %s", getenv("SRVACC") ? getenv("SRVACC") : "0");
+    usb(c1);
+    usb(c2);
+  }
+  usb("MODE stab");
+  run(1.0);
+  o = takeUsb();
+  show(o);
+  check(mode == MODE_STAB, "back in Stabil with the manual settings");
 
   // The default target is 0 (camera straight ahead, like a handheld stabiliser). The tests below model
   // belt use, camera 35 deg down, so they ask for it the way a user would.
@@ -424,6 +453,7 @@ int main() {
   truth(tp, tr);
   printf("   true camera: pitch %.2f roll %.2f   | measured: pitch %.2f roll %.2f\n", tp, tr, pitchMeas, rollMeas);
   check(fabs(pitchMeas - 35) < 0.4 && fabs(rollMeas) < 0.4, "measured angles reach the target");
+  check(walkF < 0.2 && isStill, "still body: not mistaken for walking, seen as still (also on clone chips, ACC_SCALE)");
 
   printf("== CAL level: user reads a phone level on top of the camera\n");
   {
@@ -434,7 +464,7 @@ int main() {
   run(2.5);
   show(takeUsb(), "CAL");
   {
-    const char *keys[] = {"kp", "gain", "ff", "smooth", "db", "acctau", "ffb", "pred", "sdelay", "stau", "sdb", "dbcomp", "acctauw", "dlpf", "pwmhz", "gait"};
+    const char *keys[] = {"kp", "gain", "ff", "smooth", "db", "acctau", "ffb", "pred", "sdelay", "stau", "sdb", "dbcomp", "acctauw", "dlpf", "pwmhz", "gait", "soft"};
     for (auto k : keys) {
       std::string env = k; for (auto &c : env) c = toupper(c);
       if (getenv(env.c_str())) { std::string c = std::string("SET ") + k + " " + getenv(env.c_str()); usb(c.c_str()); }
@@ -444,6 +474,21 @@ int main() {
   truth(tp, tr);
   printf("   true camera after levelling: pitch %.2f roll %.2f\n", tp, tr);
   check(fabs(tp - 35) < 0.25 && fabs(tr) < 0.25, "camera truly at 35.0 / 0.0 within 0.25 deg");
+
+  printf("== CAL twin: 3D model learns where the camera points with the servos centred (no servo moves)\n");
+  {
+    float p0 = pinPulse[3], r0 = pinPulse[4];
+    usb("CAL twin");
+    run(0.5);
+    o = takeUsb();
+    show(o, "CAL");
+    // true camera with the servos centred = true camera now minus what the servos turn it now
+    double cp = tp - outP, cr = tr - outR;
+    printf("   twin %.2f / %.2f   (true centre pose %.2f / %.2f)\n", cfg.twinP, cfg.twinR, cp, cr);
+    check(o.find("CAL DONE twin") != std::string::npos && (cfg.calOK & 8), "CAL twin finished");
+    check(fabs(cfg.twinP - cp) < 0.5 && fabs(cfg.twinR - cr) < 0.5, "3D model centre pose within 0.5 deg of the real one");
+    check(fabs(pinPulse[3] - p0) < 3 && fabs(pinPulse[4] - r0) < 3, "CAL twin does not move the servos");
+  }
 
   // two walking cases, each measured stabilised and then with the servos held in the centre
   //  goyang: the original test, lean 10/8 deg + 3 deg sway at 1.8 Hz, 0.3 g bumps
@@ -682,9 +727,16 @@ int main() {
   check(wp.sp.rms() < 0.8 && wp.sr.rms() < 0.8, "pincang: camera within 0.8 deg rms despite the left/right limp");
   check(p99(wp.jp) < 0.6 * p99(wp.jcp) && p99(wp.jr) < 0.6 * p99(wp.jcr), "pincang: jolts less than 60% of no gimbal");
   check(wc.sp.rms() < wc.cp.rms() * 0.5 && wc.sr.rms() < wc.cr.rms() * 0.5, "cepat: stabilisation removes more than half the motion");
-  check(wc.sp.rms() < 1.2 && wc.sr.rms() < 0.7, "cepat: camera within 1.2/0.7 deg rms (atas-bawah/kanan-kiri) at a brisk pace");
-  check(p99(wc.jr) < 0.6 * p99(wc.jcr), "cepat: kanan-kiri jolts less than 60% of no gimbal");
-  check(p99(wc.jp) < 0.85 * p99(wc.jcp), "cepat: atas-bawah jolt at each step below 85% of no gimbal");
+  // A brisk pace needs a fast servo: with the slow default (60 deg/s) the camera still moves less than
+  // without the gimbal, but these tighter limits are for a fast setting (MAXRATE=400 SDELAY=6 STAU=22).
+  if (cfg.maxRate >= 150) {
+    check(wc.sp.rms() < 1.2 && wc.sr.rms() < 0.7, "cepat: camera within 1.2/0.7 deg rms (atas-bawah/kanan-kiri) at a brisk pace");
+    check(p99(wc.jr) < 0.6 * p99(wc.jcr), "cepat: kanan-kiri jolts less than 60% of no gimbal");
+    check(p99(wc.jp) < 0.85 * p99(wc.jcp), "cepat: atas-bawah jolt at each step below 85% of no gimbal");
+  } else {
+    printf("   (cepat: tighter limits skipped, servo speed %.0f deg/s is the slow setting)", cfg.maxRate);
+    puts("");
+  }
   // the same walk without the learned step pattern: the pattern must make the step jolt clearly smaller
   if (cfg.gait > 0) {
     float g0 = cfg.gait;
@@ -758,11 +810,11 @@ int main() {
     usb("SET pitch 0");
     usb("SET roll 0");
     run(3.0);
-    // sideways 45 deg both ways, nose up 25, nose down 10, and a mix (leanF < 0 = body leans forward).
+    // sideways 50 deg both ways, nose up 25, nose down 10, and a mix (leanF < 0 = body leans forward).
     // The pitch servo's centre already looks 37 deg down in this frame, so straight ahead needs -37 deg
     // and a forward lean of more than ~13 deg runs into the +-50 deg servo limit.
     struct Pose { double s, f; const char *name; } poses[] = {
-        {45, 0, "miring kanan 45"}, {-45, 0, "miring kiri 45"}, {0, 25, "mendongak 25"}, {0, -10, "menunduk 10"}, {30, 15, "miring 30 + mendongak 15"}};
+        {50, 0, "miring kanan 50"}, {-50, 0, "miring kiri 50"}, {0, 25, "mendongak 25"}, {0, -10, "menunduk 10"}, {30, 15, "miring 30 + mendongak 15"}};
     for (auto &ps : poses) {
       double t0 = t_us * 1e-6, s0 = W.leanS, f0 = W.leanF;
       W.body = [=](double t, World &w) {

@@ -70,7 +70,8 @@ Layar utama menampilkan **kembaran digital 3D** (*digital twin*): model gimbal d
 
 Yang dapat diatur:
 - Sudut atas-bawah 25/30/35/40/45° atau nilai bebas 10–60°, sudut kanan-kiri, serta mode Stabil, Tengah, Manual, dan Nonaktif.
-- Kalibrasi otomatis: orientasi IMU, kabel servo yang tertukar, serta arah, skala, dan kecepatan masing-masing servo.
+- Servo diatur sendiri (tanpa kalibrasi servo): arah, kabel, skala, batas gerak, dan kecepatan. Bawaan pelan (60°/s), dengan peringatan di atas 200°/s.
+- Samakan model 3D (digital twin) dengan gimbal Anda tanpa menggerakkan servo.
 - Kalibrasi datar dengan waterpass atau aplikasi waterpass di ponsel, agar kamera benar-benar lurus.
 - PID, peredaman gerak badan, prediksi, zona mati servo, frekuensi denyut servo, filter sensor, dan uji respons lengkap dengan grafik dan CSV.
 - WiFi: pencarian dan pemilihan hotspot, alamat gimbal, serta sandi WiFi milik gimbal.
@@ -145,13 +146,11 @@ Lihat `stl/RENCANA_CETAK.md`. Ringkasnya:
 1. Arduino IDE → Boards Manager → **esp32 by Espressif Systems** versi 3.x.
 2. Pilih board **ESP32C3 Dev Module**, **USB CDC On Boot: Enabled**, dan **Partition Scheme: Huge APP (3MB No OTA/1MB SPIFFS)**. Partisi besar ini diperlukan karena aplikasi web ikut tertanam di dalam firmware.
 3. Buka `firmware/D435_gimbal_ESP32C3/D435_gimbal_ESP32C3.ino` (berkas `web_files.h` harus berada di folder yang sama), lalu unggah. Tidak diperlukan pustaka tambahan.
-4. Ikuti langkah pemakaian pertama di atas, kemudian jalankan **kalibrasi otomatis** dan **kalibrasi datar**.
-
-Sebelum dikalibrasi, kedua servo ditahan di posisi tengah agar tidak bergerak liar.
+4. Ikuti langkah pemakaian pertama di atas. Di menu **Kalibrasi**, periksa bagian **Servo** (arah, kabel, µs per derajat), lalu jalankan **kalibrasi datar** dan **Samakan model 3D**.
 
 Setiap kali aplikasi di `docs/` diubah, jalankan `python3 tools/embed_web.py` agar perubahan ikut masuk ke firmware. CI akan gagal apabila langkah ini terlewat.
 
-Perintah teks (Serial Monitor 115200 atau terminal di aplikasi): `HELP`, `GET`, `STATUS`, `SET <kunci> <nilai>`, `MODE stab|center|manual|off`, `CAL auto|gyro|level`, `STEP p 5`, `PIN <baru>`, `WIFI`, `WIFI SCAN`.
+Perintah teks (Serial Monitor 115200 atau terminal di aplikasi): `HELP`, `GET`, `STATUS`, `SET <kunci> <nilai>`, `MODE stab|center|manual|off`, `CAL gyro|level|twin`, `STEP p 5`, `PIN <baru>`, `WIFI`, `WIFI SCAN`.
 
 ## Uji simulasi firmware
 
@@ -173,7 +172,8 @@ g++ -std=gnu++17 -O2 -I mock -include array sim.cpp -o sim && ./sim
 ```
 
 Aspek yang diperiksa (semuanya lolos):
-- kalibrasi otomatis (sumbu IMU, kabel tertukar, serta arah, skala, dan kecepatan servo);
+- pengaturan servo manual (kabel tertukar, IMU terbalik, servo terbalik), kecepatan bawaan 60°/s dan peringatan di atas 200°/s, batas atas-bawah dalam µs (bawaan ±150 µs), prediksi dan kompensasi zona mati mati secara bawaan;
+- `CAL twin` mencatat posisi tengah kamera dengan selisih ≤ 0,5° tanpa menggerakkan servo;
 - setelah kalibrasi datar, kamera berada pada 35,0° / 0,0° dengan selisih ≤ 0,25°;
 - sisa guncangan saat berjalan di bawah 0,8° RMS;
 - getaran cepat yang ditambahkan servo tetap kecil;
@@ -184,6 +184,37 @@ Aspek yang diperiksa (semuanya lolos):
 - perpindahan ke hotspot dan kembali ke WiFi milik gimbal;
 - IMU yang terputus lalu terbaca kembali;
 - pengaturan tersimpan setelah dinyalakan ulang, termasuk pengaturan dari firmware 4.0 yang tetap terpakai setelah pembaruan.
+
+## Batas servo dan konversi sudut
+
+Mulai firmware 4.4 tidak ada lagi kalibrasi servo otomatis. Kalibrasi itu menggerakkan servo jauh untuk mengukurnya, dan servo atas-bawah yang menahan D435 sampai rusak giginya. Kini arah, kabel, skala, dan kecepatan servo diatur sendiri di menu **Kalibrasi → Servo**.
+
+**Kecepatan servo.** Bawaan 60°/s: pelan dan halus, tetapi guncangan kecil saat berjalan tetap diredam. Di atas 200°/s aplikasi dan gimbal memberi peringatan karena servo cepat panas dan aus. Pada simulasi, batas percepatan justru membuat kamera terlambat dan lebih bergetar, jadi batas percepatan mati secara bawaan (`srvacc 0`).
+
+**Batas atas-bawah.** Gigi servo atas-bawah selip bila porosnya diputar terlalu jauh. Posisi poros ditentukan oleh lebar denyut, jadi batasnya disimpan dalam **µs dari tengah** (`limpdn` untuk menunduk, `limpup` untuk mendongak; bawaan ±150 µs ≈ ±13° poros). Batas ini tidak berubah walau `usdeg` diganti. Cara menentukannya: pilih mode **Manual**, geser servo atas-bawah pelan ke posisi menunduk terjauh yang masih aman, lalu tekan **Jadikan batas menunduk** (`LIMP down`). Ulangi ke arah mendongak (`LIMP up`). Mode Manual sendiri hanya dibatasi `limp` (±50°) supaya batasnya bisa dicari, jadi geser pelan-pelan.
+
+**Getar saat diam.** Di gimbal asli, prediksi (`pred`) dan kompensasi zona mati (`dbcomp`) membuat servo kanan-kiri bergetar ±1–3° walau diam, dan IMU sampai membacanya sebagai langkah kaki. Dengan keduanya mati, servo diam di ±0,01°. Karena itu keduanya mati secara bawaan. Skala `usdeg` yang lebih besar juga membuat getar makin parah; di gimbal ini yang paling tenang `usdegr 5`.
+
+**Arti angka.** Semua sudut di aplikasi (target, slider Manual, batas) memakai satuan yang sama: **positif = menunduk**. Firmware mengubah sudut menjadi lebar denyut servo:
+
+```
+denyut (µs) = 1500 + trim + arah × sudut × usdeg
+```
+
+`usdeg` adalah µs per derajat (bawaan 10,5; MG90S 180° ≈ 11,1 µs per derajat poros, karena 500–2500 µs = 180°). Jika `usdeg` benar, **1° di aplikasi = 1° putaran kamera**.
+
+| Sudut di aplikasi | usdeg 11,1 (MG90S) | usdeg 33 (contoh hasil kalibrasi lama yang salah) |
+|---|---|---|
+| 1° mendongak | 11 µs ≈ 1° poros | 33 µs ≈ 3° poros |
+| 10° menunduk | 111 µs ≈ 10° poros | 330 µs ≈ 30° poros |
+| 16° menunduk | 178 µs ≈ 16° poros | 528 µs ≈ 48° poros |
+
+Jadi angka yang sama bisa berarti putaran servo yang sangat berbeda bila `usdeg` salah. Kotak **Konversi sudut** di menu Kalibrasi menampilkan untuk servo atas-bawah: sudut sekarang, µs dari tengah, dan putaran poros servo. Kotak itu juga mengukur skala sebenarnya:
+1. Lakukan **Samakan model 3D** (langkah 3 di menu Kalibrasi) dalam mode Tengah dengan badan tegak.
+2. Pilih mode **Manual**, tegakkan badan, lalu geser servo atas-bawah ke 5–15° menunduk.
+3. Aplikasi membandingkan putaran kamera (dari IMU) dengan sudut servo. Jika berbeda lebih dari 8%, aplikasi menyarankan `usdeg` yang cocok dan menyediakan tombol **Pakai skala ini**.
+
+**Model 3D (digital twin).** Model 3D dibuat dengan kamera menunduk 35° saat servo di tengah. Tombol **Samakan model 3D** (`CAL twin`) mencatat ke mana kamera gimbal Anda menghadap saat kedua servo di tengah. Caranya: sudut IMU dikurangi sudut servo saat itu, sehingga **servo tidak digerakkan**. Hasilnya disimpan di gimbal (`twinp`, `twinr`). Model 3D lalu memutar horn sebesar selisihnya, sehingga badan, servo, dan kamera di layar sama dengan gimbal Anda.
 
 ## Model Fusion
 
