@@ -65,6 +65,11 @@ static const int PIN_LED = 8;       // onboard blue LED, active LOW
 // ------------------------------------------------------------------------------------ constants
 static const uint32_t LOOP_US = 5000;  // 200 Hz control loop
 static const float CAL_DUS = 150.0f;   // auto-calibration servo move (us), about 14 degrees
+// If the camera turns less than CAL_MIN_DEG (it hit the frame or a cable on that side, or the servo
+// cannot lift the D435 that way), the move is tried the other way, then bigger (CAL_DUS_BIG, ~24 deg,
+// inside the 25 deg envelope) on the freer side. v4.2 tried once, one way, and failed.
+static const float CAL_MIN_DEG = 8.0f;
+static const float CAL_DUS_BIG = 250.0f;
 static const float TIME_DUS = 60.0f;   // auto-calibration timing steps (us), about 5 degrees
 static const int TIME_STEPS = 4;       // per servo: up, down, up, down
 static const int TIME_STEP_MS = 305;   // 305 ms: each step starts 5 ms later in the 20 ms servo frame
@@ -202,6 +207,11 @@ struct Cal {
   uint16_t tt[64];
   uint8_t tn, tstep, tCount;
   uint8_t retry = 0;  // stillness retries (servos holding the camera hum a little)
+  float amp = CAL_DUS;                      // move being tried now (us, signed)
+  float ampOf[2] = { CAL_DUS, CAL_DUS };    // move that was used for each servo
+  float mTry[3] = { 0, 0, 0 }, mMax[2] = { 0, 0 };
+  uint8_t tryN = 0;
+  bool redo = false;
 } cal;
 struct Sample {
   uint16_t t;
@@ -452,7 +462,7 @@ void cfgDefaults(Config &c, bool keepIdentity) {
   c.usDegP = 10.5f;
   c.usDegR = 10.5f;
   c.limP = 25.0f;
-  c.limR = 25.0f;
+  c.limR = 50.0f;  // kanan-kiri: full 50 deg (v4.2: 25)
   c.axF = 0;
   c.axL = 1;
   c.axU = 2;
@@ -1038,7 +1048,7 @@ void calTimeStart(uint8_t step) {
   cal.tn = 0;
   cal.tth = 0;
   float *mv = (cal.servo == 0) ? &cal.usA : &cal.usB;
-  *mv = (step % 2 == 0) ? TIME_DUS : 0;
+  *mv = (step % 2 == 0) ? copysignf(TIME_DUS, cal.ampOf[cal.servo]) : 0;  // towards the free side
 }
 // One step recorded as camera angle about that servo's axis vs time. A servo behaves like a dead time
 // followed by a lag: t10 = delay + 0.105 lag, t63 = delay + lag.
@@ -1078,9 +1088,12 @@ void calAutoSolve() {
   float m[2], n[2][3], c[2];
   for (int s = 0; s < 2; s++) {
     m[s] = vnorm(cal.rot[s]);
-    if (m[s] < 4.0f) {
-      static char msg[96];
-      snprintf(msg, sizeof(msg), "Servo di GPIO%d tidak bergerak (%.1f derajat). Periksa kabel sinyal, 5V, G, dan horn.", s == 0 ? 3 : 4, m[s]);
+    if (m[s] < 3.0f) {
+      static char msg[200];
+      snprintf(msg, sizeof(msg),
+               "Servo di GPIO%d hampir tidak bergerak (paling jauh %.1f derajat dari 3 percobaan: dua arah dan gerak besar). "
+               "Periksa kabel sinyal, 5V, G, sekrup horn, dan apakah dudukan tertahan rangka/kabel.",
+               s == 0 ? 3 : 4, cal.mMax[s]);
       calFail(msg);
       return;
     }
@@ -1136,12 +1149,14 @@ void calAutoSolve() {
   // A servo stops at the edge of its dead band, on the side it came from. The +150 us position and the
   // centre reached from below were both approached from below, so they are exactly 150 us apart.
   float th0, ph0, th1, ph1, th2, ph2, th3, ph3, thH, phH, thL, phL;
-  accAngles(cal.dbLo[pitchS], th0, ph0);
+  // (a move downwards was approached from above, so it pairs with the centre reached from above)
+  float aP = cal.ampOf[pitchS], aR = cal.ampOf[rollS];
+  accAngles(aP > 0 ? cal.dbLo[pitchS] : cal.dbHi[pitchS], th0, ph0);
   accAngles(cal.aAfter[pitchS], th1, ph1);
-  accAngles(cal.dbLo[rollS], th2, ph2);
+  accAngles(aR > 0 ? cal.dbLo[rollS] : cal.dbHi[rollS], th2, ph2);
   accAngles(cal.aAfter[rollS], th3, ph3);
   float dTh = th1 - th0, dPh = wrap180(ph3 - ph2);
-  float usDegP = CAL_DUS / fmaxf(fabsf(dTh), 0.01f), usDegR = CAL_DUS / fmaxf(fabsf(dPh), 0.01f);
+  float usDegP = fabsf(aP) / fmaxf(fabsf(dTh), 0.01f), usDegR = fabsf(aR) / fmaxf(fabsf(dPh), 0.01f);
   // the centre reached from above minus from below = the dead band
   accAngles(cal.dbHi[pitchS], thH, phH);
   accAngles(cal.dbLo[pitchS], thL, phL);
@@ -1169,8 +1184,8 @@ void calAutoSolve() {
     cfg.trimR = t;
   }
   cfg.swapServo = newSwap;
-  cfg.dirP = dTh > 0 ? 1 : -1;
-  cfg.dirR = dPh > 0 ? 1 : -1;
+  cfg.dirP = ((dTh > 0) == (aP > 0)) ? 1 : -1;
+  cfg.dirR = ((dPh > 0) == (aR > 0)) ? 1 : -1;
   cfg.usDegP = usDegP;
   cfg.usDegR = usDegR;
   bool dbOk = dbP < 40.0f && dbR < 40.0f;
@@ -1335,13 +1350,13 @@ void calUpdate(float dt) {
         calPhase(AP_OUT);
       }
       break;
-    case AP_OUT:  // ramp to +150 us in 0.6 s, integrate gyro
-      *mv = CAL_DUS * fminf(el / 600.0f, 1.0f);
+    case AP_OUT:  // ramp to the move (+150 us first) in 0.6 s, integrate gyro
+      *mv = cal.amp * fminf(el / 600.0f, 1.0f);
       for (int k = 0; k < 3; k++) cal.rot[cal.servo][k] += gyrRaw[k] * dt;
       if (el >= 600) calPhase(AP_HOLD);
       break;
     case AP_HOLD:  // keep integrating 0.4 s, then average accel 0.4 s
-      *mv = CAL_DUS;
+      *mv = cal.amp;
       if (el < 400) {
         for (int k = 0; k < 3; k++) cal.rot[cal.servo][k] += gyrRaw[k] * dt;
       } else {
@@ -1350,13 +1365,28 @@ void calUpdate(float dt) {
       }
       if (el >= 800) {
         for (int k = 0; k < 3; k++) cal.aAfter[cal.servo][k] = cal.a[k] / cal.n;
+        float m = vnorm(cal.rot[cal.servo]);
+        cal.mTry[cal.tryN] = m;
+        cal.mMax[cal.servo] = fmaxf(cal.mMax[cal.servo], m);
+        cal.ampOf[cal.servo] = cal.amp;
+        if (m < CAL_MIN_DEG && cal.tryN < 2) {  // blocked or too weak this way: try again
+          cal.tryN++;
+          cal.amp = (cal.tryN == 1) ? -CAL_DUS : (cal.mTry[1] > cal.mTry[0] ? -CAL_DUS_BIG : CAL_DUS_BIG);
+          cal.redo = true;
+          sendf(allDest() | cal.src, "CAL STEP servo%d move %.1f", cal.servo == 0 ? 3 : 4, m);
+        }
         calPhase(AP_BACK);
       }
       break;
     case AP_BACK:  // ramp back in 0.6 s, settle 0.3 s
-      *mv = CAL_DUS * (1.0f - fminf(el / 600.0f, 1.0f));
+      *mv = cal.ampOf[cal.servo] * (1.0f - fminf(el / 600.0f, 1.0f));
       if (el >= 900) {
-        if (cal.servo == 0) {
+        if (cal.redo) {  // same servo again with the next move
+          cal.redo = false;
+          calPhase(AP_BEFORE);
+        } else if (cal.servo == 0) {
+          cal.tryN = 0;
+          cal.amp = CAL_DUS;
           cal.servo = 1;
           calPhase(AP_BEFORE);
         } else {
@@ -2230,7 +2260,7 @@ bool setParam(const char *key, const char *val, char *err, size_t errLen) {
   F_("usdegp", usDegP, 5.0f, 20.0f)
   F_("usdegr", usDegR, 5.0f, 20.0f)
   F_("limp", limP, 3.0f, 25.0f)
-  F_("limr", limR, 3.0f, 50.0f)  // default 25 (checked collision-free in Fusion); more only after a test on the real frame
+  F_("limr", limR, 3.0f, 50.0f)
   F_("lvlp", lvlP, -30.0f, 30.0f)
   F_("lvlr", lvlR, -30.0f, 30.0f)
   I_("tel", telHz, 0, 25)

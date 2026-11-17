@@ -303,7 +303,7 @@ body.demo .demochip{display:inline-block}
       <div class="card" id="manualBlk" hidden>
         <header><h2>Gerak manual</h2><p>Sudut servo dari posisi tengah.</p></header>
         <div class="field"><div class="t2"><span>Servo putar atas-bawah</span><span class="val" id="manPTxt">0,0°</span></div><input type="range" id="manP" min="-25" max="25" step="0.1" value="0"></div>
-        <div class="field"><div class="t2"><span>Servo putar kanan-kiri</span><span class="val" id="manRTxt">0,0°</span></div><input type="range" id="manR" min="-25" max="25" step="0.1" value="0"></div>
+        <div class="field"><div class="t2"><span>Servo putar kanan-kiri</span><span class="val" id="manRTxt">0,0°</span></div><input type="range" id="manR" min="-50" max="50" step="0.1" value="0"></div>
         <div class="row"><button class="btn sm ghost" id="manZero">Ke tengah</button></div>
       </div>
       <div class="card">
@@ -711,7 +711,7 @@ class DemoLink {
   get name() { return "Gimbal D435 (demo)"; }
   async open() {
     this.pin = "123456"; this.authed = true; this.nonce = "";   // a simulation has nothing to protect: no PIN
-    this.cfg = { pitch: 35, roll: 0, ...DEMO_TUNING, autobias: 1, bootgyro: 1, nod: 1, trimp: 0, trimr: 0, dirp: 1, dirr: 1, swap: 0, usdegp: 10.5, usdegr: 10.5, limp: 25, limr: 25, lvlp: 0, lvlr: 0, axes: "+X+Y+Z", tel: 20, led: 1, startmode: 0, name: "Gimbal D435", cal: 4, defpin: 1, mode: "center", sdelay: 15, stau: 25 };
+    this.cfg = { pitch: 35, roll: 0, ...DEMO_TUNING, autobias: 1, bootgyro: 1, nod: 1, trimp: 0, trimr: 0, dirp: 1, dirr: 1, swap: 0, usdegp: 10.5, usdegr: 10.5, limp: 25, limr: 50, lvlp: 0, lvlr: 0, axes: "+X+Y+Z", tel: 20, led: 1, startmode: 0, name: "Gimbal D435", cal: 4, defpin: 1, mode: "center", sdelay: 15, stau: 25 };
     this.ax = [this.newAxis(), this.newAxis()];   // [pitch, roll]
     this.ms = 0; this.n = 0; this.wall = performance.now(); this.man = [0, 0]; this.stepOff = [0, 0]; this.stepRun = null;
     this.gp = 0; this.gj = 0; this.b = this.body(0); this.resetGait();
@@ -1156,6 +1156,8 @@ function showVal(key, v) {
 function applyCfg(c) {
   S.cfg = c;
   $$("[data-key]").forEach((el) => { const k = el.dataset.key; if (!(k in c) || S.dragging.has(el) || document.activeElement === el) return; if (el.type === "checkbox") el.checked = !!c[k]; else el.value = c[k]; if (el.type === "range") showVal(k, c[k]); });
+  // manual sliders reach exactly the movement limits set under Perangkat (kanan-kiri up to 50 deg)
+  [["#manP", +c.limp || 25], ["#manR", +c.limr || 25]].forEach(([id, l]) => { const el = $(id); el.min = -l; el.max = l; });
   if (!S.dragging.has($("#pitchSlider"))) $("#pitchSlider").value = c.pitch;
   $("#pitchSetTxt").textContent = fmt(c.pitch) + "°";
   $$("#presets button").forEach((b) => b.setAttribute("aria-pressed", Math.abs(+b.dataset.p - c.pitch) < 0.01));
@@ -1203,6 +1205,7 @@ function onCal(rest) {
   const show = (k, html, cls) => { const b = $(box[k] || "#calAutoOut"); b.hidden = false; b.className = "progress " + (cls || ""); b.innerHTML = html; };
   if (what === "START") { S.calKind = kind; show(kind, kind === "auto" ? "Langkah 1 dari 5: mengukur gyro dan arah gravitasi. Jangan disentuh…" : kind === "gyro" ? "Mengukur gyro selama 2 detik…" : "Mengukur sudut…"); return; }
   if (what === "STEP" && kind === "wait") { show(S.calKind || "auto", `Gimbal belum diam (getar gyro ${fmt(+more[0], 1)}°/s). Lepas tangan dan jangan disentuh, mengukur ulang…`); return; }
+  if (what === "STEP" && /^servo[34]$/.test(kind) && more[0] === "move" && more[1] !== undefined) { show("auto", `Servo di GPIO${kind.slice(5)} hanya bergerak ${fmt(+more[1], 1)}°. Mencoba arah lain atau gerakan lebih besar…`); return; }
   if (what === "STEP") { show("auto", kind === "deadband" ? "Langkah 5 dari 5: mengukur zona mati masing-masing servo…" : kind === "timing" ? "Langkah 4 dari 5: mengukur kecepatan servo dengan gerakan kecil yang cepat…" : kind === "servo4" ? "Langkah 3 dari 5: menggerakkan servo di GPIO4…" : "Langkah 2 dari 5: menggerakkan servo di GPIO3…"); return; }
   if (what === "DONE") {
     const j = parseJson(tail) || {};
