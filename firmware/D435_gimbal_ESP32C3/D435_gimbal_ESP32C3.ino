@@ -89,6 +89,12 @@ static const char *DEFAULT_PIN = "123456";
 // made the kanan-kiri servo shake +-1..3 deg while standing still (the IMU then even read it as
 // walking). With both off it stays within +-0.01 deg. The simulation preferred them; the gimbal does not.
 static const float PRED_DEFAULT = 0.0f;
+// The prediction multiplies the body's turn rate by ~60 ms. The gyro also sees the plastic frame and the
+// servo gears ringing (tens of Hz); multiplied like that and sent back to the servos it kept them
+// shaking. Body motion and steps are below ~3 Hz, so the rate is low-passed for the prediction only.
+#ifndef PRED_LP_HZ
+#define PRED_LP_HZ 4.0f
+#endif
 static const float DBCOMP_DEFAULT = 0.0f;  // us (2.5 = a quarter of the MG90S dead band; shook on the real gimbal)
 static const float SRVDB_DEFAULT = 10.0f;  // MG90S as sold: "dead band width 10 us"
 static const uint16_t PWMHZ_DEFAULT = 100;  // fine for analog servos like MG90S; 50 if one runs hot, up to 333 for digital servos
@@ -383,6 +389,7 @@ float slewP = 0, slewR = 0;  // after slew limit
 float glP = 0, glR = 0, glVP = 0, glVR = 0;  // target as it glides (deg, deg/s)
 bool glInit = false;
 float velP = 0, velR = 0;    // speed of the motion profile (deg/s)
+float rfP = 0, rfR = 0;      // body turn rate for the prediction, low-passed (deg/s)
 float lagP = 0, lagR = 0;    // how far the motion profile is behind the controller's output (deg)
 float outP = 0, outR = 0;    // after smoothing
 float manP = 0, manR = 0;    // manual mode targets
@@ -1084,6 +1091,7 @@ void srvModelStep(SrvModel &s, float out, float usDeg, float dt) {
 void controlReset() {
   cmdP = cmdR = slewP = slewR = outP = outR = ffP = ffR = lastTgtP = lastTgtR = 0;
   velP = velR = lagP = lagR = 0;
+  rfP = rfR = 0;
   glInit = false;
   srvModelReset(mdlP, 0);
   srvModelReset(mdlR, 0);
@@ -1761,7 +1769,10 @@ void control(float dt) {
     float ffb = safe ? 0.0f : cfg.ffBody, pred = safe ? 0.0f : cfg.pred;
     float lead = pred * (cfg.srvDelay + cfg.srvTau + cfg.smooth * 1000.0f) * 1e-3f;
     float bodyP = pitchMeas - mdlP.m, bodyR = rollMeas - mdlR.m;
-    float bRateP = pitchRate - mdlP.rate, bRateR = rollRate - mdlR.rate;
+    float kr = dt / (1.0f / (2.0f * (float)M_PI * PRED_LP_HZ) + dt);
+    rfP += (pitchRate - mdlP.rate - rfP) * kr;
+    rfR += (rollRate - mdlR.rate - rfR) * kr;
+    float bRateP = rfP, bRateR = rfR;
     float lin[2] = {bodyP + lead * bRateP, bodyR + lead * bRateR};
     gaitStep(bodyR, spP - pitchMeas, walkF > 0.5f && !wasSatP && cfg.gait > 0 && !safe, dt);
     ffP = ffb * (spP - lin[0]) + gaitAdd();
