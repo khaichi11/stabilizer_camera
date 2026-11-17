@@ -54,7 +54,7 @@
 #include "esp_random.h"
 #include "web_files.h"
 
-#define FW_VERSION "4.2"
+#define FW_VERSION "4.3"
 
 // ------------------------------------------------------------------------------------ pins
 static const int PIN_SDA = 6, PIN_SCL = 7;
@@ -70,6 +70,12 @@ static const int TIME_STEPS = 4;       // per servo: up, down, up, down
 static const int TIME_STEP_MS = 305;   // 305 ms: each step starts 5 ms later in the 20 ms servo frame
 static const float DB_SWING = 40.0f;   // dead band test: come back to the centre from 40 us below / above
 static const int DB_STEPS = 8;         // per servo: below, centre, above, centre, twice
+// Stillness limit while measuring the gyro bias. v4.2 used 0.6 deg/s and failed at once: two MG90S
+// holding a D435 hum by themselves (dead band hunting) and the IMU sits on the camera, so the gyro sees
+// ~0.5..1.5 deg/s of buzz even when nobody touches it. Buzz averages out of the 2 s mean (error
+// < 0.1 deg/s); only real motion matters. Not still: wait and measure again (up to 5x), then fail.
+static const float CAL_STILL_SD = 1.8f;
+static const uint8_t CAL_RETRIES = 5;
 static const char *DEFAULT_PIN = "123456";
 static const float PRED_DEFAULT = 1.1f;
 static const float DBCOMP_DEFAULT = 2.5f;  // half of the half dead band: no hunting even if it is smaller
@@ -195,6 +201,7 @@ struct Cal {
   float tb[64];
   uint16_t tt[64];
   uint8_t tn, tstep, tCount;
+  uint8_t retry = 0;  // stillness retries (servos holding the camera hum a little)
 } cal;
 struct Sample {
   uint16_t t;
@@ -251,7 +258,19 @@ struct DbComp {  // servo dead band compensation state
 // IMU
 uint8_t imuAddr = 0x68, imuWho = 0;
 bool imuOK = false;
-uint32_t i2cErr = 0;
+uint32_t i2cErr = 0, i2cErrLast = 0;
+// I2C clock. 400 kHz reads the 14 IMU bytes in ~0.5 ms instead of ~1.8 ms (less delay in every loop).
+// If the IMU wires are too long for it and errors pile up, it drops to 100 kHz by itself and remembers.
+uint32_t i2cHz = 400000;
+void i2cBegin() {
+  Wire.begin(PIN_SDA, PIN_SCL, i2cHz);
+  Wire.setTimeOut(4);  // ms: a stuck read must not eat the whole 5 ms loop (was 10)
+}
+// Accelerometer offset and gain per raw axis. Cheap MPU6050 clones can read e.g. +0.28 g on one axis at
+// rest: that bends every angle (25 deg reads as ~20 and creeps after each move) and makes |a| look like
+// steps, so the walking detector stays on. Measured with ACC in several still poses, fitted offline.
+float accOff[3] = { 0, 0, 0 }, accGain[3] = { 1, 1, 1 };
+float accAvgRaw[3] = { 0, 0, 0 };  // uncorrected, ~0.25 s average, printed by ACC
 int imuFailRun = 0;
 float accRaw[3] = { 0, 0, 1 };     // g, raw IMU axes
 float gyrUncal[3] = { 0, 0, 0 };   // deg/s, raw IMU axes, no bias removed
@@ -279,6 +298,8 @@ bool satP = false, satR = false;
 float nodOffset = 0;
 uint32_t nodUntil = 0, softStartUntil = 0;
 // housekeeping
+uint32_t lastTickUs = 0;  // when the last control step really ran
+float imuDt = 0;          // time since the last good IMU sample (a failed read must not lose that rotation)
 uint32_t lastLoopUs = 0, loopCount = 0, loopHz = 0, statT = 0, saveAt = 0, telT = 0, rebootAt = 0;
 uint32_t cpuSum = 0, cpuPeak = 0, cpuUs = 0, cpuMaxUs = 0;  // us of IMU + estimate + control per loop (average, peak)
 uint32_t bootCount = 0, brownCount = 0;
@@ -304,6 +325,13 @@ float wrap180(float a) {
   while (a > 180.0f) a -= 360.0f;
   while (a < -180.0f) a += 360.0f;
   return a;
+}
+// Not auto-calibrated yet: servo direction, scale, speed and dead band are guesses. The fast parts
+// (body feed-forward, prediction, walking pattern, dead band compensation) then overcorrect and make the
+// camera swing, so they are switched off and the PID is capped to calm values until CAL auto has
+// measured the servos. The stored settings are not touched: everything comes back after calibration.
+bool safeTune() {
+  return !(cfg.calOK & 1);
 }
 float softDB(float e, float db) {  // dead band without a step at its edge
   if (e > db) return e - db;
@@ -676,9 +704,12 @@ bool mpuInit() {
   }
   bool ok = mpuWrite(0x6B, 0x01);    // wake up, gyro PLL clock
   ok &= mpuWrite(0x1A, cfg.dlpf & 7);  // digital low-pass filter
-  ok &= mpuWrite(0x1B, 0x08);         // gyro +-500 deg/s
+  ok &= mpuWrite(0x1B, 0x10);         // gyro +-1000 deg/s: a hard jolt on stairs must not clip (that bends the attitude)
   ok &= mpuWrite(0x1C, 0x10);         // accel +-8 g: heel strikes while jogging stay unclipped
-  ok &= mpuWrite(0x19, 4);            // 200 Hz sample rate
+  // 1 kHz sample rate (was 200 Hz). The 200 Hz loop and a 200 Hz sensor drift against each other: some
+  // loops read the same sample twice, others skip one, and the data was up to 5 ms old. At 1 kHz every
+  // loop gets a sample at most 1 ms old. The DLPF still sets the bandwidth, so the noise is the same.
+  ok &= mpuWrite(0x19, 0);
   return ok;
 }
 bool mpuRead() {
@@ -697,8 +728,10 @@ bool mpuRead() {
   for (int k = 0; k < 3; k++) {
     int16_t a = (int16_t)((b[2 * k] << 8) | b[2 * k + 1]);
     int16_t g = (int16_t)((b[8 + 2 * k] << 8) | b[9 + 2 * k]);
-    accRaw[k] = a / 4096.0f;
-    gyrUncal[k] = g / 65.5f;
+    float ar = a / 4096.0f;
+    accAvgRaw[k] += (ar - accAvgRaw[k]) * 0.02f;
+    accRaw[k] = (ar - accOff[k]) * accGain[k];
+    gyrUncal[k] = g / 32.8f;
     gyrRaw[k] = gyrUncal[k] - cfg.bias[k];
   }
   return true;
@@ -885,6 +918,7 @@ void gaitStep(float bodyRoll, float err, bool learn, float dt) {
   }
 }
 float gaitAdd() {
+  if (!(cfg.calOK & 1)) return 0.0f;  // servo timing not measured: the pattern would arrive at the wrong time
   return cfg.gait * walkF * fminf(gait.amp / 0.8f, 1.0f) * gait.u;
 }
 void srvModelReset(SrvModel &s, float v) {
@@ -918,14 +952,15 @@ void controlReset() {
 }
 // A servo stops as soon as it is inside its dead band, so it ends up short of the command in the
 // direction it was moving. Adding the dead band in that direction lets it stop on the command.
-// The direction only flips after a 1 us reversal, so noise cannot make it rattle.
+// The direction only flips after a real reversal, so noise cannot make it rattle (together with the
+// pulse hold in control(), which keeps sensor noise from reaching the pulse at all).
 float dbCompApply(DbComp &c, float us) {
-  if (cfg.dbComp <= 0 || mode != MODE_STAB) {  // centre / manual / off: exactly the pulse asked for
+  if (cfg.dbComp <= 0 || mode != MODE_STAB || safeTune()) {  // centre / manual / off / not calibrated: exact pulse
     c.pk = us;
     c.sg = 0;
     return us;
   }
-  const float h = 1.0f;
+  const float h = fmaxf(1.0f, 0.3f * cfg.dbComp);  // a big backlash jump only after a real reversal, not on noise
   if (c.sg >= 0 && us < c.pk - h) {
     c.sg = -1;
     c.pk = us;
@@ -1053,7 +1088,7 @@ void calAutoSolve() {
     c[s] = fabsf(vdot(n[s], cal.up));
   }
   // roll servo turns the camera about its optical axis, which points ~35 deg down: its axis is closer to vertical
-  if (fabsf(c[1] - c[0]) < 0.2f) {
+  if (fabsf(c[1] - c[0]) < 0.1f) {  // 0.2 needed ~12 deg down, contradicting the 10 deg rule below
     calFail("Posisi tidak jelas. Tegakkan dudukan seperti saat dipakai (kamera mengarah ke bawah), lalu ulangi.");
     return;
   }
@@ -1114,7 +1149,8 @@ void calAutoSolve() {
   accAngles(cal.dbHi[rollS], thH, phH);
   accAngles(cal.dbLo[rollS], thL, phL);
   float dbR = fabsf(wrap180(phH - phL)) * usDegR;
-  if (usDegP < 6.0f || usDegP > 16.0f || usDegR < 6.0f || usDegR > 16.0f) {
+  // 5..20: a loaded MG90S with gear play turns less than the 14 deg it would without the D435 (v4.2: 6..16)
+  if (usDegP < 5.0f || usDegP > 20.0f || usDegR < 5.0f || usDegR > 20.0f) {
     cfg.axF = oF;
     cfg.axL = oL;
     cfg.axU = oU;
@@ -1192,8 +1228,15 @@ void calUpdate(float dt) {
         float mean = cal.s[k] / cal.n;
         sd = fmaxf(sd, sqrtf(fmaxf(cal.ss[k] / cal.n - mean * mean, 0)));
       }
-      if (sd > 0.6f) {
-        calFail("Gimbal bergerak. Letakkan dalam keadaan diam, lalu ulangi.");
+      if (sd > CAL_STILL_SD) {
+        if (++cal.retry <= CAL_RETRIES) {
+          sendf(allDest() | cal.src, "CAL STEP wait %.1f", sd);
+          calPhase(0);
+          return;
+        }
+        static char msg[112];
+        snprintf(msg, sizeof(msg), "Gimbal bergerak (getar gyro %.1f derajat/s, batas %.1f). Letakkan diam, lalu ulangi.", sd, CAL_STILL_SD);
+        calFail(msg);
         return;
       }
       for (int k = 0; k < 3; k++) cfg.bias[k] = cal.s[k] / cal.n;
@@ -1250,8 +1293,16 @@ void calUpdate(float dt) {
           float mean = cal.s[k] / cal.n;
           sd = fmaxf(sd, sqrtf(fmaxf(cal.ss[k] / cal.n - mean * mean, 0)));
         }
-        if (sd > 0.6f) {
-          calFail("Gimbal bergerak. Letakkan diam dan tegak seperti saat dipakai, lalu ulangi.");
+        if (sd > CAL_STILL_SD) {
+          if (++cal.retry <= CAL_RETRIES) {  // probably a touch or a bump: measure again
+            sendf(allDest() | cal.src, "CAL STEP wait %.1f", sd);
+            calPhase(AP_GYRO);
+            return;
+          }
+          static char msg[128];
+          snprintf(msg, sizeof(msg), "Gimbal bergerak (getar gyro %.1f derajat/s, batas %.1f). Jepit diam dan tegak seperti saat dipakai, lalu ulangi.", sd,
+                   CAL_STILL_SD);
+          calFail(msg);
           return;
         }
         for (int k = 0; k < 3; k++) {
@@ -1429,10 +1480,15 @@ void stepUpdate() {
 //  2) PID on the camera error mops up what the model gets wrong (servo scale, horn, load) and keeps the
 //     camera exactly on target. I = gain, P = kp, D = ff (gyro rate).
 float pidStep(float &cmd, float e, float rate, float ff, float lim, float dt) {
-  float i = clampf(cmd + (cfg.gain * e - cfg.rateFF * rate) * dt, -lim, lim);
-  float tot = ff + i + cfg.kp * e;
+  float kp = cfg.kp, ki = cfg.gain;
+  if (safeTune()) {
+    kp = fminf(kp, 0.3f);
+    ki = fminf(ki, 5.0f);
+  }
+  float i = clampf(cmd + (ki * e - cfg.rateFF * rate) * dt, -lim, lim);
+  float tot = ff + i + kp * e;
   if (!((tot > lim && e > 0) || (tot < -lim && e < 0))) cmd = i;  // no wind-up into the end stop
-  return ff + cmd + cfg.kp * e;
+  return ff + cmd + kp * e;
 }
 void control(float dt) {
   if (cal.kind == CAL_AUTO) {  // calibration drives the two pins directly
@@ -1445,6 +1501,7 @@ void control(float dt) {
   if (calFreeze()) return;  // level calibration: hold the outputs exactly where they are
   float limP = cfg.limP, limR = cfg.limR;
   float tgtP = 0, tgtR = 0;
+  bool wasSatP = satP;  // last cycle's saturation (gait learning must not learn against the end stop)
   satP = satR = false;
   if (nodUntil && (int32_t)(millis() - nodUntil) >= 0) {
     nodUntil = 0;
@@ -1454,13 +1511,15 @@ void control(float dt) {
     float spP = cfg.pitchSet + nodOffset + stepOffP, spR = cfg.rollSet + stepOffR;
     float eP = softDB(spP - pitchMeas, cfg.deadband);
     float eR = softDB(spR - rollMeas, cfg.deadband);
-    float lead = cfg.pred * (cfg.srvDelay + cfg.srvTau + cfg.smooth * 1000.0f) * 1e-3f;
+    bool safe = safeTune();
+    float ffb = safe ? 0.0f : cfg.ffBody, pred = safe ? 0.0f : cfg.pred;
+    float lead = pred * (cfg.srvDelay + cfg.srvTau + cfg.smooth * 1000.0f) * 1e-3f;
     float bodyP = pitchMeas - mdlP.m, bodyR = rollMeas - mdlR.m;
     float bRateP = pitchRate - mdlP.rate, bRateR = rollRate - mdlR.rate;
     float lin[2] = {bodyP + lead * bRateP, bodyR + lead * bRateR};
-    gaitStep(bodyR, spP - pitchMeas, walkF > 0.5f && !satP && cfg.gait > 0, dt);
-    ffP = cfg.ffBody * (spP - lin[0]) + gaitAdd();
-    ffR = cfg.ffBody * (spR - lin[1]);
+    gaitStep(bodyR, spP - pitchMeas, walkF > 0.5f && !wasSatP && cfg.gait > 0 && !safe, dt);
+    ffP = ffb * (spP - lin[0]) + gaitAdd();
+    ffR = ffb * (spR - lin[1]);
     float totP = pidStep(cmdP, eP, pitchRate, ffP, limP, dt);
     float totR = pidStep(cmdR, eR, rollRate, ffR, limR, dt);
     satP = totP >= limP || totP <= -limP;
@@ -1472,8 +1531,9 @@ void control(float dt) {
   } else if (mode == MODE_MANUAL) {
     tgtP = clampf(manP, -limP, limP);
     tgtR = clampf(manR, -limR, limR);
-    cmdP = (1.0f - cfg.ffBody) * tgtP;
-    cmdR = (1.0f - cfg.ffBody) * tgtR;
+    float ffb = safeTune() ? 0.0f : cfg.ffBody;  // so switching to stab starts exactly here (bumpless)
+    cmdP = (1.0f - ffb) * tgtP;
+    cmdR = (1.0f - ffb) * tgtR;
   } else if (mode == MODE_STAB) {  // stabilising but IMU lost / gyro calibration: hold where we are
     tgtP = lastTgtP;
     tgtR = lastTgtR;
@@ -1490,8 +1550,15 @@ void control(float dt) {
   outR += (slewR - outR) * k;
   srvModelStep(mdlP, outP, cfg.usDegP, dt);
   srvModelStep(mdlR, outR, cfg.usDegR, dt);
-  usP = dbCompApply(dbcP, 1500 + cfg.trimP + cfg.dirP * outP * cfg.usDegP);
-  usR = dbCompApply(dbcR, 1500 + cfg.trimR + cfg.dirR * outR * cfg.usDegR);
+  float wantP = dbCompApply(dbcP, 1500 + cfg.trimP + cfg.dirP * outP * cfg.usDegP);
+  float wantR = dbCompApply(dbcR, 1500 + cfg.trimR + cfg.dirR * outR * cfg.usDegR);
+  // Pulse hold: sensor noise moved the pulse by a fraction of a us every 5 ms. A servo holding the D435
+  // against gravity answers each tiny change with a kick of its motor: the constant buzz of the
+  // atas-bawah servo. The pulse now only changes when the wanted value is 1.5 us (0.15 deg) away;
+  // real motion passes straight through, noise does not.
+  const float HOLD_US = 1.5f;
+  if (mode != MODE_STAB || fabsf(wantP - usP) >= HOLD_US) usP = wantP;
+  if (mode != MODE_STAB || fabsf(wantR - usR) >= HOLD_US) usR = wantR;
   if (mode == MODE_OFF) {
     pwmWriteUs(pinPitch(), 0);
     pwmWriteUs(pinRoll(), 0);
@@ -2116,6 +2183,7 @@ void sendHelp(uint8_t dest) {
     "HELP     ffb pred sdelay stau sdb dbcomp acctauw pwmhz gait)",
     "HELP MODE stab|center|manual|off   MAN <atas-bawah> <kanan-kiri>",
     "HELP CAL auto | CAL gyro | CAL level [atas-bawah|x] [kanan-kiri|x] | CAL abort",
+    "HELP ACC | ACC off <x> <y> <z> | ACC gain <x> <y> <z> | ACC reset",
     "HELP STEP p|r <derajat>   SAVE   DEFAULTS tuning|all   PIN <baru>   NAME <nama>   REBOOT",
     "HELP WIFI | WIFI SCAN | WIFI JOIN <ssid-hex> <sandi-hex> | WIFI FORGET | WIFI AP <sandi-hex> | WIFI APOFF | WIFI ON|OFF",
   };
@@ -2150,7 +2218,7 @@ bool setParam(const char *key, const char *val, char *err, size_t errLen) {
   F_("sdelay", srvDelay, 0.0f, 60.0f)
   F_("stau", srvTau, 5.0f, 120.0f)
   F_("acctauw", accTauW, 0.3f, 10.0f)
-  F_("dbcomp", dbComp, 0.0f, 10.0f)
+  F_("dbcomp", dbComp, 0.0f, 60.0f)  // > 10: also covers gear/horn play (backlash) measured on the frame
   F_("sdb", srvDb, 0.0f, 40.0f)
   F_("gait", gait, 0.0f, 1.0f)
   I_("autobias", autoBias, 0, 1)
@@ -2159,10 +2227,10 @@ bool setParam(const char *key, const char *val, char *err, size_t errLen) {
   I_("trimp", trimP, -400, 400)
   I_("trimr", trimR, -400, 400)
   I_("swap", swapServo, 0, 1)
-  F_("usdegp", usDegP, 5.0f, 18.0f)
-  F_("usdegr", usDegR, 5.0f, 18.0f)
+  F_("usdegp", usDegP, 5.0f, 20.0f)
+  F_("usdegr", usDegR, 5.0f, 20.0f)
   F_("limp", limP, 3.0f, 25.0f)
-  F_("limr", limR, 3.0f, 25.0f)
+  F_("limr", limR, 3.0f, 50.0f)  // default 25 (checked collision-free in Fusion); more only after a test on the real frame
   F_("lvlp", lvlP, -30.0f, 30.0f)
   F_("lvlr", lvlR, -30.0f, 30.0f)
   I_("tel", telHz, 0, 25)
@@ -2384,6 +2452,45 @@ void handleLine(char *line, uint8_t src) {
       calStart(CAL_AUTO, src);
       calPhase(AP_SETTLE);
     } else sendTo(src, "ERR CAL auto|gyro|level|abort");
+  } else if (!strcmp(cmd, "ACC")) {  // ACC | ACC off <x> <y> <z> | ACC gain <x> <y> <z> | ACC reset
+    if (a1 && (!strcmp(a1, "off") || !strcmp(a1, "gain"))) {
+      char *a4 = strtok_r(nullptr, " ", &save);
+      if (!a2 || !a3 || !a4) {
+        sendTo(src, "ERR ACC off|gain <x> <y> <z>");
+        return;
+      }
+      float v[3] = { (float)atof(a2), (float)atof(a3), (float)atof(a4) };
+      bool off = !strcmp(a1, "off");
+      for (int k = 0; k < 3; k++) {
+        if (off ? !(fabsf(v[k]) <= 0.5f) : !(v[k] >= 0.7f && v[k] <= 1.4f)) {
+          sendTo(src, off ? "ERR offset harus -0.5..0.5 g" : "ERR gain harus 0.7..1.4");
+          return;
+        }
+      }
+      float *dst = off ? accOff : accGain;
+      for (int k = 0; k < 3; k++) dst[k] = v[k];
+      prefs.putBytes(off ? "accoff" : "accgain", dst, 3 * sizeof(float));
+      attitudeReset();
+    } else if (a1 && !strcmp(a1, "reset")) {
+      for (int k = 0; k < 3; k++) {
+        accOff[k] = 0;
+        accGain[k] = 1;
+      }
+      prefs.putBytes("accoff", accOff, sizeof(accOff));
+      prefs.putBytes("accgain", accGain, sizeof(accGain));
+      attitudeReset();
+    } else if (a1) {
+      sendTo(src, "ERR ACC | ACC off <x> <y> <z> | ACC gain <x> <y> <z> | ACC reset");
+      return;
+    }
+    float n = 0;  // |a| of the averaged reading with the current offset and gain: 1.000 when right
+    for (int k = 0; k < 3; k++) {
+      float c = (accAvgRaw[k] - accOff[k]) * accGain[k];
+      n += c * c;
+    }
+    n = sqrtf(n);
+    sendf(src, "ACC raw %.4f %.4f %.4f off %.4f %.4f %.4f gain %.4f %.4f %.4f norm %.4f", accAvgRaw[0], accAvgRaw[1],
+          accAvgRaw[2], accOff[0], accOff[1], accOff[2], accGain[0], accGain[1], accGain[2], n);
   } else if (!strcmp(cmd, "STEP")) {
     if (mode != MODE_STAB || !imuOK || cal.kind != CAL_IDLE || capState) {
       sendTo(src, "ERR uji respons hanya dapat dijalankan dalam mode stab, saat tidak ada kalibrasi");
@@ -2561,8 +2668,15 @@ void bootGyro() {
 void setup() {
   pinMode(PIN_LED, OUTPUT);
   digitalWrite(PIN_LED, HIGH);
+  Serial.setTxBufferSize(4096);  // CFG/STATUS lines are longer than the 256-byte default and were dropped
   Serial.begin(115200);
   prefs.begin("gimbal", false);
+  if (prefs.getBytesLength("accoff") == sizeof(accOff)) prefs.getBytes("accoff", accOff, sizeof(accOff));
+  if (prefs.getBytesLength("accgain") == sizeof(accGain)) prefs.getBytes("accgain", accGain, sizeof(accGain));
+  for (int k = 0; k < 3; k++) {
+    if (!(fabsf(accOff[k]) <= 0.5f)) accOff[k] = 0;
+    if (!(accGain[k] >= 0.7f && accGain[k] <= 1.4f)) accGain[k] = 1;
+  }
   if (!cfgLoad()) {
     memset(&cfg, 0, sizeof(cfg));
     cfgDefaults(cfg, false);
@@ -2589,9 +2703,17 @@ void setup() {
     delay(350);
   }
 
-  Wire.begin(PIN_SDA, PIN_SCL, 100000);  // 100 kHz: robust over the long moving IMU wires
-  Wire.setTimeOut(10);
+  i2cHz = prefs.getUInt("i2chz", 400000);
+  if (i2cHz != 100000 && i2cHz != 400000) i2cHz = 400000;
+  i2cBegin();
   imuOK = mpuInit();
+  if (!imuOK && i2cHz != 100000) {  // long/loose wires: try the slow, robust clock before giving up
+    Wire.end();
+    i2cHz = 100000;
+    i2cBegin();
+    imuOK = mpuInit();
+    if (imuOK) prefs.putUInt("i2chz", i2cHz);
+  }
   wifiInit();
   if (imuOK) {
     delay(100);
@@ -2607,23 +2729,30 @@ void setup() {
         (unsigned long)brownCount);
   if (cfgMigrated) event("Pengaturan dari firmware %s tetap dipakai; pengaturan baru diisi nilai bawaan", cfgMigrated);
   if (!imuOK) event("IMU tidak terbaca: periksa VCC->3V3, GND->G, SDA->GPIO6, SCL->GPIO7");
-  if (!(cfg.calOK & 1)) event("Belum dikalibrasi: servo ditahan di tengah. Jalankan kalibrasi otomatis.");
+  if (!(cfg.calOK & 1))
+    event("Belum dikalibrasi: servo ditahan di tengah. Mode Stabil memakai setelan aman (tanpa umpan maju/prediksi) sampai kalibrasi otomatis berhasil.");
+  event("I2C IMU %lu kHz", (unsigned long)(i2cHz / 1000));
   if (!cfg.wifiOn) event("WiFi nonaktif (kirim WIFI ON lewat USB untuk mengaktifkan)");
-  lastLoopUs = micros();
+  lastLoopUs = lastTickUs = micros();
   statT = millis();
 }
 
-void loop() {
-  pollInputs();
-  netPoll();
+// One 200 Hz control step. Called before and after the network work, so a busy moment on WiFi delays a
+// step by less. The schedule is kept on a fixed 5 ms grid (v4.2 restarted the 5 ms from whenever the
+// step happened to run, so every late step pushed all later ones back: ~190 Hz with jitter).
+bool controlTick() {
   uint32_t nowUs = micros();
-  if ((uint32_t)(nowUs - lastLoopUs) < LOOP_US) return;
-  float dt = (nowUs - lastLoopUs) * 1e-6f;
+  if ((int32_t)(nowUs - (lastLoopUs + LOOP_US)) < 0) return false;
+  lastLoopUs += LOOP_US;
+  if ((int32_t)(nowUs - lastLoopUs) > (int32_t)(2 * LOOP_US)) lastLoopUs = nowUs;  // far behind: no burst of catch-up steps
+  float dt = (uint32_t)(nowUs - lastTickUs) * 1e-6f;  // real time since the last step
+  lastTickUs = nowUs;
   if (dt > 0.05f) dt = 0.05f;
-  lastLoopUs = nowUs;
+  if (dt < 1e-3f) dt = 1e-3f;
   loopCount++;
   uint32_t workT0 = micros();
 
+  imuDt = fminf(imuDt + dt, 0.05f);
   if (mpuRead()) {
     if (!imuOK) {
       imuOK = true;
@@ -2631,7 +2760,8 @@ void loop() {
       event("IMU terbaca lagi");
     }
     imuFailRun = 0;
-    estimate(dt);
+    estimate(imuDt);
+    imuDt = 0;
     if (cfg.autoBias && stillTime > 2.0f && mode == MODE_STAB && cal.kind == CAL_IDLE) {
       for (int k = 0; k < 3; k++) cfg.bias[k] += 0.0005f * gyrRaw[k];  // follow slow gyro drift
     }
@@ -2644,9 +2774,9 @@ void loop() {
     }
     if (!imuOK && imuFailRun % 200 == 0) {  // try again every second
       Wire.end();
-      Wire.begin(PIN_SDA, PIN_SCL, 100000);
-      Wire.setTimeOut(10);
-      mpuInit();
+      if (imuFailRun % 400 == 0) i2cHz = (i2cHz == 400000) ? 100000 : 400000;  // alternate the clock
+      i2cBegin();
+      if (mpuInit() && prefs.getUInt("i2chz", 400000) != i2cHz) prefs.putUInt("i2chz", i2cHz);
     }
   }
   calUpdate(dt);
@@ -2668,7 +2798,26 @@ void loop() {
     accRejPct = accCount ? 100.0f * accRejCount / accCount : 0;
     accCount = accRejCount = 0;
     statT = now;
+    // too many I2C errors at 400 kHz (long or moving wires): drop to 100 kHz for good
+    uint32_t errs = i2cErr - i2cErrLast;
+    i2cErrLast = i2cErr;
+    if (errs >= 10 && i2cHz == 400000) {
+      i2cHz = 100000;
+      Wire.end();
+      i2cBegin();
+      mpuInit();
+      prefs.putUInt("i2chz", i2cHz);
+      event("Banyak galat I2C (%lu/s): IMU dipindah ke 100 kHz", (unsigned long)errs);
+    }
   }
   if (saveAt && (int32_t)(now - saveAt) >= 0) cfgSave();
   if (rebootAt && (int32_t)(now - rebootAt) >= 0) ESP.restart();
+  return true;
+}
+
+void loop() {
+  pollInputs();
+  controlTick();
+  netPoll();
+  controlTick();
 }

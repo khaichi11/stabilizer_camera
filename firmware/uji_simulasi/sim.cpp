@@ -233,7 +233,7 @@ uint8_t TwoWire::requestFrom(int address, int size) {
       put16(rBuf, (v + 0.004 * nd(rng)) * (16384 >> ((regs[0x1C] >> 3) & 3)));  // LSB per g from ACCEL_CONFIG
     }
     put16(rBuf, 0);  // temperature
-    for (int k = 0; k < 3; k++) put16(rBuf, (W.omega[k] + W.gyroBias[k] + 0.05 * nd(rng)) * 65.5);
+    for (int k = 0; k < 3; k++) put16(rBuf, (W.omega[k] + W.gyroBias[k] + 0.05 * nd(rng)) * 32.8);
   }
   while ((int)rBuf.size() < size) rBuf.push_back(0);
   return (uint8_t)size;

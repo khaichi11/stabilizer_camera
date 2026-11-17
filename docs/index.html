@@ -356,10 +356,10 @@ body.demo .demochip{display:inline-block}
         <div class="grid2">
           <label class="field"><span>Arah servo putar atas-bawah</span><select data-key="dirp"><option value="1">Normal</option><option value="-1">Terbalik</option></select></label>
           <label class="field"><span>Arah servo putar kanan-kiri</span><select data-key="dirr"><option value="1">Normal</option><option value="-1">Terbalik</option></select></label>
-          <label class="field"><span>µs per derajat, servo putar atas-bawah</span><input type="number" step="0.1" data-key="usdegp"></label>
-          <label class="field"><span>µs per derajat, servo putar kanan-kiri</span><input type="number" step="0.1" data-key="usdegr"></label>
+          <label class="field"><span>µs per derajat, servo putar atas-bawah</span><input type="number" step="0.1" min="5" max="20" data-key="usdegp"></label>
+          <label class="field"><span>µs per derajat, servo putar kanan-kiri</span><input type="number" step="0.1" min="5" max="20" data-key="usdegr"></label>
           <label class="field"><span>Batas gerak atas-bawah (±°)</span><input type="number" step="0.5" min="3" max="25" data-key="limp"></label>
-          <label class="field"><span>Batas gerak kanan-kiri (±°)</span><input type="number" step="0.5" min="3" max="25" data-key="limr"></label>
+          <label class="field"><span>Batas gerak kanan-kiri (±°)</span><input type="number" step="0.5" min="3" max="50" data-key="limr"></label>
           <label class="field"><span>Kabel servo</span><select data-key="swap"><option value="0">GPIO3 atas-bawah, GPIO4 kanan-kiri</option><option value="1">Tertukar (GPIO3 kanan-kiri)</option></select></label>
           <label class="field"><span>Sumbu MPU6050 (maju, kiri, atas)</span><input type="text" data-key="axes" placeholder="+X+Y+Z" maxlength="6"></label>
         </div>
@@ -1116,7 +1116,8 @@ function explain(d) {
   else { tP.textContent = signed(d.op) + "°"; tR.textContent = signed(d.or) + "°"; }
   let w = "";
   if (!(d.flags & 1)) w = "MPU6050 tidak terbaca. Periksa keempat kabel sensor.";
-  else if (d.mode === 0 && (d.flags & 24)) w = "Servo di batas ±" + fmt(+S.cfg.limp || 25, 0) + "°. Badan terlalu miring.";
+  else if (d.mode === 0 && (d.flags & 24)) w = ((d.flags & 8) && (d.flags & 16) ? "Kedua servo" : (d.flags & 8) ? "Servo atas-bawah di batas ±" + fmt(+S.cfg.limp || 25, 0) + "°" : "Servo kanan-kiri di batas ±" + fmt(+S.cfg.limr || 25, 0) + "°") + (d.flags & 8 && d.flags & 16 ? " di batas geraknya" : "") + ". Badan terlalu miring.";
+  else if (d.mode === 0 && S.cfg.cal !== undefined && !(+S.cfg.cal & 1)) w = "Belum dikalibrasi otomatis: mode Stabil memakai setelan aman (lebih pelan). Jalankan Kalibrasi otomatis.";
   else if (d.mode === 1) w = "Mode Tengah: servo diam.";
   $("#chWarn").textContent = w; $("#chWarn").hidden = !w;
   $("#chWalk").hidden = !!w || !(d.flags & 128);
@@ -1200,7 +1201,8 @@ function onCal(rest) {
   const [what, kind, ...more] = rest.split(" "), tail = more.join(" ");
   const box = { auto: "#calAutoOut", gyro: "#calGyroOut", level: "#calLevelOut" };
   const show = (k, html, cls) => { const b = $(box[k] || "#calAutoOut"); b.hidden = false; b.className = "progress " + (cls || ""); b.innerHTML = html; };
-  if (what === "START") { show(kind, kind === "auto" ? "Langkah 1 dari 5: mengukur gyro dan arah gravitasi. Jangan disentuh…" : kind === "gyro" ? "Mengukur gyro selama 2 detik…" : "Mengukur sudut…"); return; }
+  if (what === "START") { S.calKind = kind; show(kind, kind === "auto" ? "Langkah 1 dari 5: mengukur gyro dan arah gravitasi. Jangan disentuh…" : kind === "gyro" ? "Mengukur gyro selama 2 detik…" : "Mengukur sudut…"); return; }
+  if (what === "STEP" && kind === "wait") { show(S.calKind || "auto", `Gimbal belum diam (getar gyro ${fmt(+more[0], 1)}°/s). Lepas tangan dan jangan disentuh, mengukur ulang…`); return; }
   if (what === "STEP") { show("auto", kind === "deadband" ? "Langkah 5 dari 5: mengukur zona mati masing-masing servo…" : kind === "timing" ? "Langkah 4 dari 5: mengukur kecepatan servo dengan gerakan kecil yang cepat…" : kind === "servo4" ? "Langkah 3 dari 5: menggerakkan servo di GPIO4…" : "Langkah 2 dari 5: menggerakkan servo di GPIO3…"); return; }
   if (what === "DONE") {
     const j = parseJson(tail) || {};

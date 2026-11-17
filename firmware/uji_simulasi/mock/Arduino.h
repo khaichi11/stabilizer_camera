@@ -43,6 +43,7 @@ struct MockSerial {
   std::string out;
   bool connected = true;
   void begin(unsigned long) {}
+  void setTxBufferSize(size_t) {}
   int available() { return (int)in.size(); }
   int read() { if (in.empty()) return -1; char c = in.front(); in.pop_front(); return (uint8_t)c; }
   int availableForWrite() { return 4096; }
