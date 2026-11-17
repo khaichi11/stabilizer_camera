@@ -376,7 +376,8 @@ body.demo .demochip{display:inline-block}
         <div class="step" id="calTwinLi"><span class="n">3</span><div class="b">
           <h3>Samakan model 3D (digital twin)</h3>
           <p class="muted">Pilih mode Tengah, tegakkan badan gimbal seperti saat dipakai, lalu tekan tombol. Servo tidak digerakkan: gimbal hanya mencatat ke mana kamera menghadap saat kedua servo di tengah, supaya model 3D sama persis dengan gimbal Anda.</p>
-          <div class="row"><button class="btn" id="calTwin">Samakan model 3D</button></div>
+          <div class="row"><button class="btn" id="calTwinK">1. Ukur skala servo</button><button class="btn" id="calTwin">2. Samakan model 3D</button></div>
+          <p class="muted" style="font-size:13px">Ukur skala: servo atas-bawah menunduk 10° lalu servo kanan-kiri 12°, masing-masing kembali ke tengah (±15 detik, masih di dalam batas aman). Aplikasi mengukur seberapa jauh kamera benar-benar berputar, supaya badan model 3D tetap tegak walau servo memutar kamera kurang dari perintah. Gimbal harus tegak dan diam.</p>
           <div class="progress" id="calTwinOut" hidden></div>
         </div></div>
       </div>
@@ -732,7 +733,7 @@ class DemoLink {
   get name() { return "Gimbal D435 (demo)"; }
   async open() {
     this.pin = "123456"; this.authed = true; this.nonce = "";   // a simulation has nothing to protect: no PIN
-    this.cfg = { pitch: 0, roll: 0, ...DEMO_TUNING, autobias: 1, bootgyro: 1, nod: 1, trimp: 0, trimr: 0, dirp: 1, dirr: 1, swap: 0, usdegp: 10.5, usdegr: 10.5, limp: 50, limpdn: 150, limpup: -150, twinp: 35, twinr: 0, limr: 55, lvlp: 0, lvlr: 0, axes: "+X+Y+Z", tel: 20, led: 1, startmode: 0, name: "Gimbal D435", cal: 4, defpin: 1, mode: "center", sdelay: 15, stau: 25 };
+    this.cfg = { pitch: 0, roll: 0, ...DEMO_TUNING, autobias: 1, bootgyro: 1, nod: 1, trimp: 0, trimr: 0, dirp: 1, dirr: 1, swap: 0, usdegp: 10.5, usdegr: 10.5, limp: 50, limpdn: 150, limpup: -150, twinp: 35, twinr: 0, twinkp: 1, twinkr: 1, limr: 55, lvlp: 0, lvlr: 0, axes: "+X+Y+Z", tel: 20, led: 1, startmode: 0, name: "Gimbal D435", cal: 4, defpin: 1, mode: "center", sdelay: 15, stau: 25 };
     this.ax = [this.newAxis(), this.newAxis()];   // [pitch, roll]
     this.ms = 0; this.n = 0; this.wall = performance.now(); this.man = [0, 0]; this.stepOff = [0, 0]; this.stepRun = null;
     this.gp = 0; this.gj = 0; this.b = this.body(0); this.resetGait();
@@ -1101,8 +1102,10 @@ function onTel(line) {
   // the real camera points then (twinp/twinr); the difference is shown as the horn mounted that much
   // further round, so model body, servos and camera all match the real gimbal.
   const twP = Number.isFinite(+S.cfg.twinp) ? +S.cfg.twinp : NOMINAL, twR = Number.isFinite(+S.cfg.twinr) ? +S.cfg.twinr : 0;
-  const bp = d.p - twP - d.op, br = d.r - twR - d.or;
-  if (window.Twin) window.Twin.update(bp, br, d.op + (twP - NOMINAL), d.or + twR);
+  // twinkp/twinkr: how far the camera really turns per commanded degree (measured with "Ukur skala")
+  const kP = +S.cfg.twinkp || 1, kR = +S.cfg.twinkr || 1, spR = d.op * kP, srR = d.or * kR;
+  const bp = d.p - twP - spR, br = d.r - twR - srR;
+  if (window.Twin) window.Twin.update(bp, br, spR + (twP - NOMINAL), srR + twR);
   queueDraw();
 }
 let drawPending = false, lastExplain = 0;
@@ -1262,6 +1265,32 @@ function onCal(rest) {
 }
 $("#calGyro").onclick = () => send("CAL gyro");
 $("#calTwin").onclick = () => send("CAL twin");
+// Measure the real camera turn per commanded degree of each servo (for the 3D model only).
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function telAvg(ms) {
+  const last = S.tel.length ? S.tel[S.tel.length - 1].t : 0, w = S.tel.filter((d) => d.t >= last - ms);
+  if (w.length < 3) return null;
+  const m = (k) => w.reduce((a, d) => a + d[k], 0) / w.length;
+  return { p: m("p"), r: m("r"), op: m("op"), or: m("or") };
+}
+$("#calTwinK").onclick = async () => {
+  const out = $("#calTwinOut"), say = (h, c) => { out.hidden = false; out.className = "progress " + (c || ""); out.innerHTML = h; };
+  if (!(+S.cfg.tel > 0)) { send("SET tel 20"); await sleep(800); }
+  const before = S.cfg.mode || "center";
+  say("Mengukur skala servo: jangan sentuh gimbal…");
+  send("MODE manual"); await sleep(500); send("MAN 0 0"); await sleep(2500);
+  const a0 = telAvg(1000);
+  send("MAN 10 0"); await sleep(3000); const a1 = telAvg(1000);
+  send("MAN 0 0"); await sleep(2500); const a2 = telAvg(1000);
+  send("MAN 0 12"); await sleep(3000); const a3 = telAvg(1000);
+  send("MAN 0 0"); await sleep(2000); send("MODE " + before);
+  if (!a0 || !a1 || !a2 || !a3) { say("Gagal: data gerak tidak masuk. Periksa Kecepatan kirim data di menu Perangkat.", "bad"); return; }
+  const kP = (a1.p - a0.p) / ((a1.op - a0.op) || 1), kR = (a3.r - a2.r) / ((a3.or - a2.or) || 1);
+  const ok = (k) => Number.isFinite(k) && k > 0.1 && k < 3;
+  if (!ok(kP) || !ok(kR)) { say(`Gagal: hasil tidak wajar (atas-bawah ×${fmt(kP, 2)}, kanan-kiri ×${fmt(kR, 2)}). Gimbal mungkin bergerak, atau arah servo terbalik. Ulangi dengan gimbal diam.`, "bad"); return; }
+  send(`SET twinkp ${kP.toFixed(2)}`); send(`SET twinkr ${kR.toFixed(2)}`);
+  say(`Selesai. Kamera berputar ×${fmt(kP, 2)} dari perintah di atas-bawah dan ×${fmt(kR, 2)} di kanan-kiri. Sekarang tekan <b>2. Samakan model 3D</b> dengan gimbal tegak.`, "ok");
+};
 $("#calLevel").onclick = () => {
   const useP = $("#lvlUseP").checked, useR = $("#lvlUseR").checked, p = $("#lvlPIn").value.replace(",", "."), r = $("#lvlRIn").value.replace(",", ".");
   if (useP && p === "") { toast("Isi sudut atas-bawah yang terbaca, atau hilangkan centang Gunakan sudut atas-bawah", "warn"); return; }
