@@ -312,6 +312,7 @@ int imuFailRun = 0;
 float accRaw[3] = { 0, 0, 1 };     // g, raw IMU axes
 float gyrUncal[3] = { 0, 0, 0 };   // deg/s, raw IMU axes, no bias removed
 float gyrRaw[3] = { 0, 0, 0 };     // deg/s, raw IMU axes, bias removed
+float gyrInt[3] = { 0, 0, 0 };     // deg, rotation summed per raw axis since GYRO reset (diagnosis)
 // attitude
 float thRaw = 0, phRaw = 0;        // estimator (deg), before level offsets
 float gEst[3] = { 0, 0, 1 };       // gravity direction in camera axes (F, L, U), unit length
@@ -1172,8 +1173,13 @@ void calAutoSolve() {
   float w[3] = { cal.up[0], cal.up[1], cal.up[2] };
   w[iF] = 0;
   int iU = argmaxAbs(w, iF);
-  if (fabsf(w[iU]) < 0.5f) {
-    calFail("Arah atas IMU tidak jelas. Tegakkan dudukan, lalu ulangi.");
+  if (fabsf(w[iU]) < 0.5f) {  // optical axis nearly vertical: "up" of the picture cannot be told from gravity
+    static char msg[180];
+    snprintf(msg, sizeof(msg),
+             "Kamera menghadap hampir tegak lurus ke %s (%.0f derajat dari datar). Posisikan gimbal agar kamera lebih mendatar "
+             "(lurus sampai menunduk 60 derajat), lalu ulangi.",
+             (cal.up[iF] * sF > 0) ? "atas" : "bawah", asinf(clampf(fabsf(cal.up[iF]), 0.0f, 1.0f)) * RAD_TO_DEG);
+    calFail(msg);
     return;
   }
   int8_t sU = (w[iU] > 0) ? 1 : -1;
@@ -1431,8 +1437,8 @@ void calUpdate(float dt) {
           if (nb > 0.5f && na > 0.5f) {
             float cg = clampf(vdot(cal.aBefore[cal.servo], cal.aAfter[cal.servo]) / (nb * na), -1.0f, 1.0f);
             float ax = fabsf(vdot(cal.rot[cal.servo], cal.up)) / mg;
-            float acc = acosf(cg) * RAD_TO_DEG / sqrtf(fmaxf(1.0f - ax * ax, 0.1f));
-            m = fminf(mg, acc);
+            // only when the servo axis is fairly level: about a vertical axis gravity does not change at all
+            if (ax < 0.7f) m = fminf(mg, acosf(cg) * RAD_TO_DEG / sqrtf(1.0f - ax * ax));
           }
         }
         cal.mAcc[cal.servo] = m;
@@ -2577,6 +2583,14 @@ void handleLine(char *line, uint8_t src) {
       calStart(CAL_AUTO, src);
       calPhase(AP_SETTLE);
     } else sendTo(src, "ERR CAL auto|gyro|level|abort");
+  } else if (!strcmp(cmd, "GYRO")) {  // GYRO | GYRO reset: rotation per raw gyro axis, to check each axis
+    if (a1 && !strcasecmp(a1, "reset")) {
+      for (int k = 0; k < 3; k++) gyrInt[k] = 0;
+      sendTo(src, "OK GYRO reset");
+    } else {
+      sendf(src, "GYRO int %.2f %.2f %.2f now %.2f %.2f %.2f bias %.2f %.2f %.2f", gyrInt[0], gyrInt[1], gyrInt[2], gyrRaw[0], gyrRaw[1],
+            gyrRaw[2], cfg.bias[0], cfg.bias[1], cfg.bias[2]);
+    }
   } else if (!strcmp(cmd, "ACC")) {  // ACC | ACC off <x> <y> <z> | ACC gain <x> <y> <z> | ACC reset
     if (a1 && (!strcmp(a1, "off") || !strcmp(a1, "gain"))) {
       char *a4 = strtok_r(nullptr, " ", &save);
@@ -2885,6 +2899,7 @@ bool controlTick() {
       event("IMU terbaca lagi");
     }
     imuFailRun = 0;
+    for (int k = 0; k < 3; k++) gyrInt[k] += gyrRaw[k] * imuDt;
     estimate(imuDt);
     imuDt = 0;
     if (cfg.autoBias && stillTime > 2.0f && mode == MODE_STAB && cal.kind == CAL_IDLE) {
