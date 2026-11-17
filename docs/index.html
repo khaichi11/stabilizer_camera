@@ -314,6 +314,8 @@ body.demo .demochip{display:inline-block}
         <div class="field"><div class="t2"><span>Servo putar atas-bawah</span><span class="val" id="manPTxt">0,0°</span></div><input type="range" id="manP" min="-25" max="25" step="0.1" value="0"></div>
         <div class="field"><div class="t2"><span>Servo putar kanan-kiri</span><span class="val" id="manRTxt">0,0°</span></div><input type="range" id="manR" min="-50" max="50" step="0.1" value="0"></div>
         <div class="row"><button class="btn sm ghost" id="manZero">Ke tengah</button></div>
+        <p class="muted" style="font-size:13px;margin:10px 0 6px">Menentukan batas aman servo atas-bawah: geser pelan sampai posisi menunduk terjauh yang masih aman (sebelum servo berbunyi atau selip), tekan tombol pertama. Ulangi ke arah mendongak. Mode Manual tidak dibatasi batas ini, jadi geser pelan-pelan.</p>
+        <div class="row"><button class="btn sm" id="limDn">Jadikan batas menunduk</button><button class="btn sm" id="limUp">Jadikan batas mendongak</button></div>
       </div>
       <div class="card">
         <header><h2>Selisih dari target, 10 detik</h2></header>
@@ -336,8 +338,8 @@ body.demo .demochip{display:inline-block}
           <label class="field"><span>Sumbu MPU6050 (maju, kiri, atas)</span><input type="text" data-key="axes" placeholder="+X+Y+Z" maxlength="6"></label>
           <label class="field"><span>µs per derajat, atas-bawah</span><input type="number" step="0.1" min="5" max="60" data-key="usdegp"></label>
           <label class="field"><span>µs per derajat, kanan-kiri</span><input type="number" step="0.1" min="5" max="60" data-key="usdegr"></label>
-          <label class="field"><span>Paling mendongak (°, aman −1)</span><input type="number" step="0.5" min="-60" max="0" data-key="limpmin"></label>
-          <label class="field"><span>Paling menunduk (°, aman 16)</span><input type="number" step="0.5" min="0" max="60" data-key="limpmax"></label>
+          <label class="field"><span>Batas atas-bawah menunduk (µs dari tengah)</span><input type="number" step="1" min="-1000" max="1000" data-key="limpdn"></label>
+          <label class="field"><span>Batas atas-bawah mendongak (µs dari tengah)</span><input type="number" step="1" min="-1000" max="1000" data-key="limpup"></label>
           <label class="field"><span>Batas gerak atas-bawah (±°)</span><input type="number" step="0.5" min="3" max="60" data-key="limp"></label>
           <label class="field"><span>Batas gerak kanan-kiri (±°)</span><input type="number" step="0.5" min="3" max="60" data-key="limr"></label>
         </div>
@@ -730,7 +732,7 @@ class DemoLink {
   get name() { return "Gimbal D435 (demo)"; }
   async open() {
     this.pin = "123456"; this.authed = true; this.nonce = "";   // a simulation has nothing to protect: no PIN
-    this.cfg = { pitch: 0, roll: 0, ...DEMO_TUNING, autobias: 1, bootgyro: 1, nod: 1, trimp: 0, trimr: 0, dirp: 1, dirr: 1, swap: 0, usdegp: 10.5, usdegr: 10.5, limp: 16, limpmin: -1, limpmax: 16, twinp: 35, twinr: 0, limr: 55, lvlp: 0, lvlr: 0, axes: "+X+Y+Z", tel: 20, led: 1, startmode: 0, name: "Gimbal D435", cal: 4, defpin: 1, mode: "center", sdelay: 15, stau: 25 };
+    this.cfg = { pitch: 0, roll: 0, ...DEMO_TUNING, autobias: 1, bootgyro: 1, nod: 1, trimp: 0, trimr: 0, dirp: 1, dirr: 1, swap: 0, usdegp: 10.5, usdegr: 10.5, limp: 50, limpdn: 150, limpup: -150, twinp: 35, twinr: 0, limr: 55, lvlp: 0, lvlr: 0, axes: "+X+Y+Z", tel: 20, led: 1, startmode: 0, name: "Gimbal D435", cal: 4, defpin: 1, mode: "center", sdelay: 15, stau: 25 };
     this.ax = [this.newAxis(), this.newAxis()];   // [pitch, roll]
     this.ms = 0; this.n = 0; this.wall = performance.now(); this.man = [0, 0]; this.stepOff = [0, 0]; this.stepRun = null;
     this.gp = 0; this.gj = 0; this.b = this.body(0); this.resetGait();
@@ -922,6 +924,7 @@ class DemoLink {
       case "PIN": this.pin = a1; c.defpin = a1 === "123456" ? 1 : 0; this.out("OK PIN"); return this.out(this.cfgLine());
       case "NAME": c.name = (a1 || "").replace(/_/g, " "); return this.out(`OK NAME ${c.name} (berlaku setelah restart)`);
       case "SAVE": return this.out("OK SAVE");
+      case "LIMP": { const off = Math.round(this.ax[0].out * c.usdegp * c.dirp); if (/^down$/i.test(a1)) c.limpdn = off; else c.limpup = off; this.out(`OK LIMP ${a1} ${off} us`); return this.out(this.cfgLine()); }
       case "DEFAULTS": Object.assign(c, DEMO_TUNING, { pitch: 0, roll: 0 }); return this.out(this.cfgLine());
       case "REBOOT": this.out("OK REBOOT"); setTimeout(() => this.close(), 300); return;
       case "HELP": return this.out("HELP (demo) GET STATUS SET MODE MAN CAL STEP PIN NAME SAVE DEFAULTS REBOOT");
@@ -1124,9 +1127,10 @@ function drawAll() {
 const MG90S_US_PER_DEG = 11.1;
 function convText(d) {
   const c = S.cfg, u = +c.usdegp || 11, us = d.op * u, shaft = us / MG90S_US_PER_DEG;
-  const lo = Math.max(-(+c.limp || 16), Number.isFinite(+c.limpmin) ? +c.limpmin : -16), hi = Math.min(+c.limp || 16, Number.isFinite(+c.limpmax) ? +c.limpmax : 16);
-  let t = `Atas-bawah sekarang ${signed(d.op)}° = ${signed(us)} µs dari tengah ≈ ${signed(shaft)}° putaran poros servo (MG90S ${fmt(MG90S_US_PER_DEG, 1)} µs per derajat poros). `
-    + `Batas ${fmt(hi)}° menunduk = ${fmt(hi * u, 0)} µs ≈ ${fmt(hi * u / MG90S_US_PER_DEG)}° poros; ${fmt(-lo)}° mendongak = ${fmt(-lo * u, 0)} µs. Positif = menunduk.`;
+  const dir = +c.dirp || 1, dn = +c.limpdn || 0, up = +c.limpup || 0, usNow = dir * us;
+  const toDeg = (x) => x / (dir * u);   // us from centre -> app degrees with the current scale
+  let t = `Atas-bawah sekarang ${signed(d.op)}° = ${signed(usNow)} µs dari tengah ≈ ${signed(usNow / MG90S_US_PER_DEG)}° putaran poros servo (MG90S ${fmt(MG90S_US_PER_DEG, 1)} µs per derajat poros). `
+    + `Batas menunduk ${signed(dn)} µs = ${signed(toDeg(dn))}° di aplikasi ≈ ${fmt(Math.abs(dn) / MG90S_US_PER_DEG)}° poros; batas mendongak ${signed(up)} µs = ${signed(toDeg(up))}° ≈ ${fmt(Math.abs(up) / MG90S_US_PER_DEG)}° poros. Positif di aplikasi = menunduk. Batas disimpan dalam µs, jadi tidak berubah walau skala diganti.`;
   S.convUs = null;
   if ((c.cal & 8) && d.mode === 2 && Math.abs(d.op) >= 4) {
     const cam = d.p - (+c.twinp), r = cam / d.op;
@@ -1188,8 +1192,7 @@ function applyCfg(c) {
   $$("[data-key]").forEach((el) => { const k = el.dataset.key; if (!(k in c) || S.dragging.has(el) || document.activeElement === el) return; if (el.type === "checkbox") el.checked = !!c[k]; else el.value = c[k]; if (el.type === "range") showVal(k, c[k]); });
   // manual sliders reach exactly the movement limits set under Perangkat (kanan-kiri up to 50 deg)
   const lp = +c.limp || 16, lr = +c.limr || 25;
-  const pLo = Math.max(-lp, Number.isFinite(+c.limpmin) ? +c.limpmin : -lp), pHi = Math.min(lp, Number.isFinite(+c.limpmax) ? +c.limpmax : lp);
-  [["#manP", pLo, pHi], ["#manR", -lr, lr]].forEach(([id, lo, hi]) => { const el = $(id); el.min = lo; el.max = hi; });
+  [["#manP", -lp, lp], ["#manR", -lr, lr]].forEach(([id, lo, hi]) => { const el = $(id); el.min = lo; el.max = hi; });
   if (!S.dragging.has($("#pitchSlider"))) $("#pitchSlider").value = c.pitch;
   $("#pitchSetTxt").textContent = fmt(c.pitch) + "°";
   $$("#presets button").forEach((b) => b.setAttribute("aria-pressed", Math.abs(+b.dataset.p - c.pitch) < 0.01));
@@ -1234,6 +1237,8 @@ let manT = 0;
 function sendMan() { $("#manPTxt").textContent = fmt(+$("#manP").value) + "°"; $("#manRTxt").textContent = fmt(+$("#manR").value) + "°"; clearTimeout(manT); manT = setTimeout(() => send(`MAN ${$("#manP").value} ${$("#manR").value}`), 80); }
 $("#manP").addEventListener("input", sendMan); $("#manR").addEventListener("input", sendMan);
 $("#manZero").onclick = () => { $("#manP").value = 0; $("#manR").value = 0; sendMan(); };
+$("#limDn").onclick = () => send("LIMP down");
+$("#limUp").onclick = () => send("LIMP up");
 $$("[data-nudge]").forEach((b) => b.addEventListener("click", () => { const k = b.dataset.nudge, d = +b.dataset.d, cur = +S.cfg[k] || 0; const v = k.startsWith("trim") ? Math.round(cur + d) : Math.round((cur + d) * 100) / 100; S.cfg[k] = v; send(`SET ${k} ${v}`); }));
 
 // ======================================================================== calibration

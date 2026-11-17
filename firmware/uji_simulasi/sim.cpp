@@ -230,7 +230,9 @@ uint8_t TwoWire::requestFrom(int address, int size) {
     for (int i = 0; i < 3; i++) fw[i] = up[i] + W.accLin[i];
     for (int k = 0; k < 3; k++) {  // specific force in IMU frame = Rimu^T * f
       double v = W.Rimu[0][k] * fw[0] + W.Rimu[1][k] * fw[1] + W.Rimu[2][k] * fw[2];
-      put16(rBuf, (v + 0.004 * nd(rng)) * (16384 >> ((regs[0x1C] >> 3) & 3)));  // LSB per g from ACCEL_CONFIG
+      // ACC_SCALE: clone chips read e.g. 1.07 g at rest
+      static const double accScale = getenv("ACC_SCALE") ? atof(getenv("ACC_SCALE")) : 1.0;
+      put16(rBuf, (v * accScale + 0.004 * nd(rng)) * (16384 >> ((regs[0x1C] >> 3) & 3)));  // LSB per g from ACCEL_CONFIG
     }
     put16(rBuf, 0);  // temperature
     for (int k = 0; k < 3; k++) put16(rBuf, (W.omega[k] + W.gyroBias[k] + 0.05 * nd(rng)) * 32.8);
@@ -398,12 +400,16 @@ int main() {
   printf("== manual servo setup (cables swapped on purpose, IMU chip-down, pitch servo reversed)\n");
   // No servo calibration any more: the user picks wiring, directions, scale and IMU axes in the app.
   check(fabs(cfg.maxRate - 60) < 0.01 && cfg.srvAcc == 0, "default servo speed is slow: 60 deg/s, no acceleration limit");
-  check(cfg.limPMin == -1 && cfg.limPMax == 16, "atas-bawah limited to 16 deg down / 1 deg up by default (gears slipped beyond that)");
+  check(cfg.limPUsDn == 150 && cfg.limPUsUp == -150, "atas-bawah limited to +-150 us from the centre until the user sets the safe range");
+  check(cfg.pred == 0 && cfg.dbComp == 0, "prediction and dead band compensation off by default (they shook the real gimbal)");
   // This simulated frame mounts the pitch servo 37 deg nose-down, so straight ahead alone needs -37 deg:
   // the tests below use the old +-50 deg limit. On the real gimbal the horn is set straight in Tengah.
   usb("SET limp 50");
-  usb("SET limpmin -50");
-  usb("SET limpmax 50");
+  usb("SET limpdn 1000");
+  usb("SET limpup -1000");
+  // The simulated servos have no frame resonance, so the faster tuning used before is tested here.
+  usb("SET pred 1.1");
+  usb("SET dbcomp 2.5");
   usb("MODE center");
   usb("SET swap 1");
   usb("SET axes -X+Y-Z");
@@ -447,6 +453,7 @@ int main() {
   truth(tp, tr);
   printf("   true camera: pitch %.2f roll %.2f   | measured: pitch %.2f roll %.2f\n", tp, tr, pitchMeas, rollMeas);
   check(fabs(pitchMeas - 35) < 0.4 && fabs(rollMeas) < 0.4, "measured angles reach the target");
+  check(walkF < 0.2 && isStill, "still body: not mistaken for walking, seen as still (also on clone chips, ACC_SCALE)");
 
   printf("== CAL level: user reads a phone level on top of the camera\n");
   {

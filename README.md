@@ -172,7 +172,7 @@ g++ -std=gnu++17 -O2 -I mock -include array sim.cpp -o sim && ./sim
 ```
 
 Aspek yang diperiksa (semuanya lolos):
-- pengaturan servo manual (kabel tertukar, IMU terbalik, servo terbalik), kecepatan bawaan 60°/s dan peringatan di atas 200°/s, batas atas-bawah 16° menunduk / 1° mendongak;
+- pengaturan servo manual (kabel tertukar, IMU terbalik, servo terbalik), kecepatan bawaan 60°/s dan peringatan di atas 200°/s, batas atas-bawah dalam µs (bawaan ±150 µs), prediksi dan kompensasi zona mati mati secara bawaan;
 - `CAL twin` mencatat posisi tengah kamera dengan selisih ≤ 0,5° tanpa menggerakkan servo;
 - setelah kalibrasi datar, kamera berada pada 35,0° / 0,0° dengan selisih ≤ 0,25°;
 - sisa guncangan saat berjalan di bawah 0,8° RMS;
@@ -191,7 +191,9 @@ Mulai firmware 4.4 tidak ada lagi kalibrasi servo otomatis. Kalibrasi itu mengge
 
 **Kecepatan servo.** Bawaan 60°/s: pelan dan halus, tetapi guncangan kecil saat berjalan tetap diredam. Di atas 200°/s aplikasi dan gimbal memberi peringatan karena servo cepat panas dan aus. Pada simulasi, batas percepatan justru membuat kamera terlambat dan lebih bergetar, jadi batas percepatan mati secara bawaan (`srvacc 0`).
 
-**Batas atas-bawah.** Bawaan **16° menunduk dan 1° mendongak** (hampir tengah). Di luar itu gigi servo selip. Pengaturannya `limpmax 16` (menunduk) dan `limpmin -1` (mendongak), dibatasi lagi oleh `limp` (±16).
+**Batas atas-bawah.** Gigi servo atas-bawah selip bila porosnya diputar terlalu jauh. Posisi poros ditentukan oleh lebar denyut, jadi batasnya disimpan dalam **µs dari tengah** (`limpdn` untuk menunduk, `limpup` untuk mendongak; bawaan ±150 µs ≈ ±13° poros). Batas ini tidak berubah walau `usdeg` diganti. Cara menentukannya: pilih mode **Manual**, geser servo atas-bawah pelan ke posisi menunduk terjauh yang masih aman, lalu tekan **Jadikan batas menunduk** (`LIMP down`). Ulangi ke arah mendongak (`LIMP up`). Mode Manual sendiri hanya dibatasi `limp` (±50°) supaya batasnya bisa dicari, jadi geser pelan-pelan.
+
+**Getar saat diam.** Di gimbal asli, prediksi (`pred`) dan kompensasi zona mati (`dbcomp`) membuat servo kanan-kiri bergetar ±1–3° walau diam, dan IMU sampai membacanya sebagai langkah kaki. Dengan keduanya mati, servo diam di ±0,01°. Karena itu keduanya mati secara bawaan. Skala `usdeg` yang lebih besar juga membuat getar makin parah; di gimbal ini yang paling tenang `usdegr 5`.
 
 **Arti angka.** Semua sudut di aplikasi (target, slider Manual, batas) memakai satuan yang sama: **positif = menunduk**. Firmware mengubah sudut menjadi lebar denyut servo:
 

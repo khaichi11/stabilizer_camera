@@ -85,8 +85,11 @@ static const int DB_STEPS = 8;         // per servo: below, centre, above, centr
 static const float CAL_STILL_SD = 1.8f;
 static const uint8_t CAL_RETRIES = 5;
 static const char *DEFAULT_PIN = "123456";
-static const float PRED_DEFAULT = 1.1f;
-static const float DBCOMP_DEFAULT = 2.5f;  // half of the half dead band: no hunting even if it is smaller
+// Measured on the real gimbal (MG90S, clone IMU): prediction 0.7..1.1 and dead band compensation 2.5
+// made the kanan-kiri servo shake +-1..3 deg while standing still (the IMU then even read it as
+// walking). With both off it stays within +-0.01 deg. The simulation preferred them; the gimbal does not.
+static const float PRED_DEFAULT = 0.0f;
+static const float DBCOMP_DEFAULT = 0.0f;  // us (2.5 = a quarter of the MG90S dead band; shook on the real gimbal)
 static const float SRVDB_DEFAULT = 10.0f;  // MG90S as sold: "dead band width 10 us"
 static const uint16_t PWMHZ_DEFAULT = 100;  // fine for analog servos like MG90S; 50 if one runs hot, up to 333 for digital servos
 static const float SMOOTH_DEFAULT = 0.02f;
@@ -102,12 +105,11 @@ static const float SOFT_DEFAULT = 0.5f;
 // An acceleration limit was tried as well: every value made the camera follow later and shake more
 // (360 deg/s^2 cannot follow walking at all), so it is off by default and only an advanced option.
 static const float SPEED_DEFAULT = 60.0f;   // deg/s
-// The atas-bawah servo holds the whole D435: its gears slipped (broke twice) when it turned further, so
-// by default it may only turn the camera 16 deg down and 1 deg up from the centre (positive = down, as
-// for the target angle). Changeable in the app (limpmin = up, limpmax = down).
-static const float LIMP_SAFE = 16.0f;       // deg, symmetric cap
-static const float LIMP_MIN_SAFE = -1.0f;   // deg: at most 1 deg up (just past the centre)
-static const float LIMP_MAX_SAFE = 16.0f;   // deg: at most 16 deg down
+// The atas-bawah servo holds the whole D435 and its gears slipped (broke twice) past some shaft
+// position. That position is a pulse width, so the limits are kept in us from the centre pulse (they do
+// not change when usdeg is changed). Set them in Manual mode: move the servo to the furthest safe point
+// and send LIMP down / LIMP up (buttons in the app). Until then +-150 us (~13 deg of shaft).
+static const float LIMP_US_DEFAULT = 150.0f;
 static const float SPEED_WARN = 200.0f;     // deg/s
 static const float ACC_DEFAULT = 0.0f;      // deg/s^2, 0 = no acceleration limit
 static const char *DEFAULT_NAME = "Gimbal D435";
@@ -158,7 +160,7 @@ struct Config {
   float soft;  // 0..1: smoothness. A new target glides there instead of jumping (0 = jump)
   // v4.4
   float srvAcc;  // deg/s^2: optional servo acceleration limit (0 = off); maxRate is the speed limit
-  float limPMin, limPMax;  // deg: atas-bawah servo range inside +-limP (positive = camera down), e.g. -1..+16
+  float limPUsDn, limPUsUp;  // us from the centre pulse: atas-bawah servo position limits (camera down / up)
   float twinP, twinR;      // deg: camera pitch/roll with both servos in the centre and the body upright (3D model)
   uint32_t crc;
 };
@@ -361,7 +363,11 @@ float gyrInt[3] = { 0, 0, 0 };     // deg, rotation summed per raw axis since GY
 // attitude
 float thRaw = 0, phRaw = 0;        // estimator (deg), before level offsets
 float gEst[3] = { 0, 0, 1 };       // gravity direction in camera axes (F, L, U), unit length
-float walkLvl = 0, walkF = 0;      // walking detector: mean |a|-1g, and 0..1
+float walkLvl = 0, walkF = 0;      // walking detector: mean bounce of |a|, and 0..1
+// |a| at rest, followed slowly. Clone chips (WHO 0x70/0x74...) read e.g. 0.93 g or 1.07 g when still;
+// measured against exactly 1 g that offset looked like walking all the time (gait learning on, the
+// accelerometer trusted less, never "still"). The bounce is now measured against this level.
+float anRest = 1.0f;
 float pitchMeas = 0, rollMeas = 0; // after level offsets (deg)
 float pitchRate = 0, rollRate = 0; // Euler rates (deg/s)
 float stillTime = 0;
@@ -539,9 +545,9 @@ void cfgDefaults(Config &c, bool keepIdentity) {
   c.startMode = MODE_STAB;
   c.usDegP = 10.5f;
   c.usDegR = 10.5f;
-  c.limP = LIMP_SAFE;
-  c.limPMin = LIMP_MIN_SAFE;
-  c.limPMax = LIMP_MAX_SAFE;
+  c.limP = 50.0f;  // overall cap; the real safe range is limPUsDn / limPUsUp
+  c.limPUsDn = LIMP_US_DEFAULT;
+  c.limPUsUp = -LIMP_US_DEFAULT;
   c.twinP = 35.0f;  // the 3D model's own pose (belt use) until CAL twin measures the real one
   c.twinR = 0.0f;  // atas-bawah: +-16 deg, the MG90S under the D435 slips its gears beyond that (4.3: 50)
   c.limR = 55.0f;  // kanan-kiri: a 50 deg lean is still corrected, with a little to spare (v4.2: 25)
@@ -639,7 +645,6 @@ bool cfgLoad() {
   }
   // 4.4: slow, gentle servos by default (older firmware ran them at up to 400 deg/s)
   if (cfgMigrated) {
-    t.limP = fminf(t.limP, LIMP_SAFE);
     t.maxRate = SPEED_DEFAULT;
     t.srvAcc = ACC_DEFAULT;
   }
@@ -657,8 +662,8 @@ bool cfgLoad() {
   t.gait = clampf(t.gait, 0.0f, 1.0f);
   t.soft = clampf(t.soft, 0.0f, 1.0f);
   t.maxRate = clampf(t.maxRate, 20.0f, 600.0f);
-  t.limPMin = clampf(t.limPMin, -60.0f, 0.0f);
-  t.limPMax = clampf(t.limPMax, 0.0f, 60.0f);
+  t.limPUsDn = clampf(t.limPUsDn, -1000.0f, 1000.0f);
+  t.limPUsUp = clampf(t.limPUsUp, -1000.0f, 1000.0f);
   if (!(t.twinP > -90.0f && t.twinP < 90.0f)) t.twinP = 35.0f;
   if (!(t.twinR > -90.0f && t.twinR < 90.0f)) t.twinR = 0.0f;
   t.srvAcc = t.srvAcc <= 0.0f ? 0.0f : clampf(t.srvAcc, 200.0f, 20000.0f);
@@ -898,6 +903,7 @@ void attitudeReset() {
   gEst[0] = f / n;
   gEst[1] = l / n;
   gEst[2] = u / n;
+  if (n > 0.5f && n < 1.5f) anRest = n;
   gravAngles(thRaw, phRaw);
   pitchMeas = thRaw - cfg.lvlP;
   rollMeas = phRaw - cfg.lvlR;
@@ -917,7 +923,9 @@ void estimate(float dt) {
   gEst[1] = g1 - (wU * g0 - wF * g2) * dt;
   gEst[2] = g2 - (wF * g1 - wL * g0) * dt;
   // walking detector: the up/down bounce of the steps
-  float an = sqrtf(aF * aF + aL * aL + aU * aU), dev = fabsf(an - 1.0f);
+  float an = sqrtf(aF * aF + aL * aL + aU * aU);
+  if (an > 0.5f && an < 1.5f) anRest += (an - anRest) * dt / (8.0f + dt);  // ~8 s: steps average out
+  float dev = fabsf(an - anRest);
   walkLvl += (dev - walkLvl) * dt / (0.5f + dt);
   walkF = clampf((walkLvl - 0.02f) / 0.05f, 0.0f, 1.0f);
   // accelerometer correction: still -> skip shakes (|a| far from 1 g). Walking -> take EVERY sample with
@@ -954,7 +962,7 @@ void estimate(float dt) {
   rollMeas = phRaw - cfg.lvlR;
   float gm = sqrtf(gF * gF + gL * gL + gU * gU);
   // stillness (used by calibration and slow gyro-bias tracking)
-  if (gm < 1.5f && fabsf(an - 1.0f) < 0.05f) stillTime += dt;
+  if (gm < 1.5f && dev < 0.05f) stillTime += dt;
   else stillTime = 0;
   isStill = stillTime > 1.0f;
 }
@@ -1709,7 +1717,14 @@ void control(float dt) {
   if (calFreeze()) return;  // level calibration: hold the outputs exactly where they are
   // a servo can only be driven between 500 and 2500 us: with a large us-per-degree that is fewer degrees
   float limP = fminf(cfg.limP, 950.0f / fmaxf(cfg.usDegP, 1.0f)), limR = fminf(cfg.limR, 950.0f / fmaxf(cfg.usDegR, 1.0f));
-  float loP = fmaxf(-limP, cfg.limPMin), hiP = fminf(limP, cfg.limPMax);  // atas-bawah: 1 up .. 16 down
+  // atas-bawah: the safe shaft range in us, turned into degrees with the current scale and direction.
+  // It always includes the centre. Manual mode uses only the overall cap, so the limits can be found.
+  float uA = cfg.limPUsDn / (cfg.dirP * fmaxf(cfg.usDegP, 1.0f)), uB = cfg.limPUsUp / (cfg.dirP * fmaxf(cfg.usDegP, 1.0f));
+  float loP = fmaxf(-limP, fminf(fminf(uA, uB), 0.0f)), hiP = fminf(limP, fmaxf(fmaxf(uA, uB), 0.0f));
+  if (mode == MODE_MANUAL) {
+    loP = -limP;
+    hiP = limP;
+  }
   float tgtP = 0, tgtR = 0;
   bool wasSatP = satP;  // last cycle's saturation (gait learning must not learn against the end stop)
   satP = satR = false;
@@ -2386,12 +2401,12 @@ void sendCfg(uint8_t dest) {
         "\"acctau\":%.2f,\"dlpf\":%u,\"autobias\":%u,\"bootgyro\":%u,\"nod\":%u,\"trimp\":%d,\"trimr\":%d,\"dirp\":%d,"
         "\"dirr\":%d,\"swap\":%d,\"usdegp\":%.2f,\"usdegr\":%.2f,\"limp\":%.1f,\"limr\":%.1f,\"lvlp\":%.2f,\"lvlr\":%.2f,"
         "\"axes\":\"%s\",\"tel\":%d,\"led\":%d,\"startmode\":%d,\"name\":\"%s\",\"cal\":%u,\"defpin\":%d,\"mode\":\"%s\","
-        "\"ffb\":%.2f,\"pred\":%.2f,\"sdelay\":%.1f,\"stau\":%.1f,\"acctauw\":%.2f,\"dbcomp\":%.1f,\"sdb\":%.1f,\"pwmhz\":%u,\"gait\":%.2f,\"soft\":%.2f,\"srvacc\":%.0f,\"limpmin\":%.1f,\"limpmax\":%.1f,\"twinp\":%.2f,\"twinr\":%.2f}",
+        "\"ffb\":%.2f,\"pred\":%.2f,\"sdelay\":%.1f,\"stau\":%.1f,\"acctauw\":%.2f,\"dbcomp\":%.1f,\"sdb\":%.1f,\"pwmhz\":%u,\"gait\":%.2f,\"soft\":%.2f,\"srvacc\":%.0f,\"limpdn\":%.0f,\"limpup\":%.0f,\"twinp\":%.2f,\"twinr\":%.2f}",
         cfg.pitchSet, cfg.rollSet, cfg.kp, cfg.gain, cfg.rateFF, cfg.deadband, cfg.smooth, cfg.maxRate, cfg.accTau, cfg.dlpf,
         cfg.autoBias, cfg.bootGyro, cfg.nod, cfg.trimP, cfg.trimR, cfg.dirP, cfg.dirR, cfg.swapServo, cfg.usDegP,
         cfg.usDegR, cfg.limP, cfg.limR, cfg.lvlP, cfg.lvlR, ax, cfg.telHz, cfg.ledOn, cfg.startMode, cfg.name, cfg.calOK,
         strcmp(cfg.pin, DEFAULT_PIN) == 0 ? 1 : 0, MODE_NAMES[mode], cfg.ffBody, cfg.pred, cfg.srvDelay, cfg.srvTau,
-        cfg.accTauW, cfg.dbComp, cfg.srvDb, (unsigned)cfg.pwmHz, cfg.gait, cfg.soft, cfg.srvAcc, cfg.limPMin, cfg.limPMax, cfg.twinP, cfg.twinR);
+        cfg.accTauW, cfg.dbComp, cfg.srvDb, (unsigned)cfg.pwmHz, cfg.gait, cfg.soft, cfg.srvAcc, cfg.limPUsDn, cfg.limPUsUp, cfg.twinP, cfg.twinR);
 }
 void sendStatus(uint8_t dest) {
   sendf(dest,
@@ -2413,8 +2428,8 @@ void sendHelp(uint8_t dest) {
     "HELP GET | STATUS | EVLOG | PING | HELLO",
     "HELP SET <kunci> <nilai>   (pitch roll kp gain ff db smooth maxrate acctau dlpf autobias bootgyro nod",
     "HELP     trimp trimr dirp dirr swap usdegp usdegr limp limr lvlp lvlr axes tel led startmode",
-    "HELP     ffb pred sdelay stau sdb dbcomp acctauw pwmhz gait soft srvacc limpmin limpmax twinp twinr)",
-    "HELP MODE stab|center|manual|off   MAN <atas-bawah> <kanan-kiri>",
+    "HELP     ffb pred sdelay stau sdb dbcomp acctauw pwmhz gait soft srvacc limpdn limpup twinp twinr)",
+    "HELP MODE stab|center|manual|off   MAN <atas-bawah> <kanan-kiri>   LIMP down|up (batas = posisi Manual sekarang)",
     "HELP CAL gyro | CAL level [atas-bawah|x] [kanan-kiri|x] | CAL twin | CAL abort",
     "HELP ACC | ACC off <x> <y> <z> | ACC gain <x> <y> <z> | ACC reset",
     "HELP STEP p|r <derajat>   SAVE   DEFAULTS tuning|all   PIN <baru>   NAME <nama>   REBOOT",
@@ -2474,8 +2489,8 @@ bool setParam(const char *key, const char *val, char *err, size_t errLen) {
   F_("usdegp", usDegP, 5.0f, 60.0f)
   F_("usdegr", usDegR, 5.0f, 60.0f)
   F_("limp", limP, 3.0f, 60.0f)
-  F_("limpmin", limPMin, -60.0f, 0.0f)
-  F_("limpmax", limPMax, 0.0f, 60.0f)
+  F_("limpdn", limPUsDn, -1000.0f, 1000.0f)
+  F_("limpup", limPUsUp, -1000.0f, 1000.0f)
   F_("twinp", twinP, -89.0f, 89.0f)
   F_("twinr", twinR, -89.0f, 89.0f)
   F_("limr", limR, 3.0f, 60.0f)
@@ -2653,6 +2668,19 @@ void handleLine(char *line, uint8_t src) {
       glInit = false;  // the target glides from where the camera points now
     }
     mode = (Mode)m;
+    sendCfg(allDest() | src);
+  } else if (!strcmp(cmd, "LIMP")) {  // LIMP down|up: the atas-bawah servo's current position becomes that limit
+    if (mode != MODE_MANUAL || !a1 || (strcasecmp(a1, "down") && strcasecmp(a1, "up"))) {
+      sendTo(src, "ERR LIMP down|up, dalam MODE manual: geser servo atas-bawah ke posisi aman terjauh dulu");
+      return;
+    }
+    float off = usP - 1500.0f - cfg.trimP;  // the pulse the servo has now, from its centre
+    bool dn = !strcasecmp(a1, "down");
+    if (dn) cfg.limPUsDn = off;
+    else cfg.limPUsUp = off;
+    cfgSaveSoon();
+    sendf(src, "OK LIMP %s %.0f us", dn ? "down" : "up", off);
+    event("Batas servo atas-bawah %s: %.0f us dari tengah (%.1f derajat poros MG90S)", dn ? "menunduk" : "mendongak", off, off / 11.1f);
     sendCfg(allDest() | src);
   } else if (!strcmp(cmd, "MAN")) {
     if (!a1 || !a2) {
