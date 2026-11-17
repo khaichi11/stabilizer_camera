@@ -89,6 +89,12 @@ static const char *DEFAULT_PIN = "123456";
 // made the kanan-kiri servo shake +-1..3 deg while standing still (the IMU then even read it as
 // walking). With both off it stays within +-0.01 deg. The simulation preferred them; the gimbal does not.
 static const float PRED_DEFAULT = 0.0f;
+// The prediction multiplies the body's turn rate by ~60 ms. The gyro also sees the plastic frame and the
+// servo gears ringing (tens of Hz); multiplied like that and sent back to the servos it kept them
+// shaking. Body motion and steps are below ~3 Hz, so the rate is low-passed for the prediction only.
+#ifndef PRED_LP_HZ
+#define PRED_LP_HZ 4.0f
+#endif
 static const float DBCOMP_DEFAULT = 0.0f;  // us (2.5 = a quarter of the MG90S dead band; shook on the real gimbal)
 static const float SRVDB_DEFAULT = 10.0f;  // MG90S as sold: "dead band width 10 us"
 static const uint16_t PWMHZ_DEFAULT = 100;  // fine for analog servos like MG90S; 50 if one runs hot, up to 333 for digital servos
@@ -150,7 +156,7 @@ struct Config {
   float srvDb;     // us: servo dead band width as in its datasheet (it stops within half of it on either side)
   uint16_t pwmHz;  // servo pulses per second
   uint8_t wifiOn;  // 0 = WiFi off (USB only)
-  uint8_t pad41;
+  uint8_t ditherUs;  // us: small pulse wobble that keeps the servo out of its dead band (0 = off); was padding
   char wifiSsid[33];  // hotspot to join (empty = only the gimbal's own WiFi)
   char wifiPass[65];
   char apPass[33];    // the gimbal's own WiFi (8..32)
@@ -383,6 +389,7 @@ float slewP = 0, slewR = 0;  // after slew limit
 float glP = 0, glR = 0, glVP = 0, glVR = 0;  // target as it glides (deg, deg/s)
 bool glInit = false;
 float velP = 0, velR = 0;    // speed of the motion profile (deg/s)
+float rfP = 0, rfR = 0;      // body turn rate for the prediction, low-passed (deg/s)
 float lagP = 0, lagR = 0;    // how far the motion profile is behind the controller's output (deg)
 float outP = 0, outR = 0;    // after smoothing
 float manP = 0, manR = 0;    // manual mode targets
@@ -1084,6 +1091,7 @@ void srvModelStep(SrvModel &s, float out, float usDeg, float dt) {
 void controlReset() {
   cmdP = cmdR = slewP = slewR = outP = outR = ffP = ffR = lastTgtP = lastTgtR = 0;
   velP = velR = lagP = lagR = 0;
+  rfP = rfR = 0;
   glInit = false;
   srvModelReset(mdlP, 0);
   srvModelReset(mdlR, 0);
@@ -1761,7 +1769,10 @@ void control(float dt) {
     float ffb = safe ? 0.0f : cfg.ffBody, pred = safe ? 0.0f : cfg.pred;
     float lead = pred * (cfg.srvDelay + cfg.srvTau + cfg.smooth * 1000.0f) * 1e-3f;
     float bodyP = pitchMeas - mdlP.m, bodyR = rollMeas - mdlR.m;
-    float bRateP = pitchRate - mdlP.rate, bRateR = rollRate - mdlR.rate;
+    float kr = dt / (1.0f / (2.0f * (float)M_PI * PRED_LP_HZ) + dt);
+    rfP += (pitchRate - mdlP.rate - rfP) * kr;
+    rfR += (rollRate - mdlR.rate - rfR) * kr;
+    float bRateP = rfP, bRateR = rfR;
     float lin[2] = {bodyP + lead * bRateP, bodyR + lead * bRateR};
     gaitStep(bodyR, spP - pitchMeas, walkF > 0.5f && !wasSatP && cfg.gait > 0 && !safe, dt);
     ffP = ffb * (spP - lin[0]) + gaitAdd();
@@ -1811,8 +1822,14 @@ void control(float dt) {
     pwmWriteUs(pinPitch(), 0);
     pwmWriteUs(pinRoll(), 0);
   } else {
-    pwmWriteUs(pinPitch(), usP);
-    pwmWriteUs(pinRoll(), usR);
+    // Dither: +-ditherUs on alternate servo frames (50 Hz at 100 Hz pulses). The MG90S only moves once its
+    // command has changed by more than its dead band and then jumps (measured: stalls, then 0.5..1.2 deg
+    // jumps on a perfectly smooth ramp). The wobble is too fast and too small to move the camera, but it
+    // keeps the motor from sticking, so small changes are followed at once: smooth instead of stepwise.
+    float dz = 0.0f;
+    if (cfg.ditherUs) dz = ((micros() / (1000000UL / cfg.pwmHz)) & 1) ? cfg.ditherUs : -(float)cfg.ditherUs;
+    pwmWriteUs(pinPitch(), usP + dz);
+    pwmWriteUs(pinRoll(), usR + dz);
   }
 }
 
@@ -2401,12 +2418,12 @@ void sendCfg(uint8_t dest) {
         "\"acctau\":%.2f,\"dlpf\":%u,\"autobias\":%u,\"bootgyro\":%u,\"nod\":%u,\"trimp\":%d,\"trimr\":%d,\"dirp\":%d,"
         "\"dirr\":%d,\"swap\":%d,\"usdegp\":%.2f,\"usdegr\":%.2f,\"limp\":%.1f,\"limr\":%.1f,\"lvlp\":%.2f,\"lvlr\":%.2f,"
         "\"axes\":\"%s\",\"tel\":%d,\"led\":%d,\"startmode\":%d,\"name\":\"%s\",\"cal\":%u,\"defpin\":%d,\"mode\":\"%s\","
-        "\"ffb\":%.2f,\"pred\":%.2f,\"sdelay\":%.1f,\"stau\":%.1f,\"acctauw\":%.2f,\"dbcomp\":%.1f,\"sdb\":%.1f,\"pwmhz\":%u,\"gait\":%.2f,\"soft\":%.2f,\"srvacc\":%.0f,\"limpdn\":%.0f,\"limpup\":%.0f,\"twinp\":%.2f,\"twinr\":%.2f}",
+        "\"ffb\":%.2f,\"pred\":%.2f,\"sdelay\":%.1f,\"stau\":%.1f,\"acctauw\":%.2f,\"dbcomp\":%.1f,\"sdb\":%.1f,\"pwmhz\":%u,\"gait\":%.2f,\"soft\":%.2f,\"srvacc\":%.0f,\"limpdn\":%.0f,\"limpup\":%.0f,\"twinp\":%.2f,\"twinr\":%.2f,\"dither\":%u}",
         cfg.pitchSet, cfg.rollSet, cfg.kp, cfg.gain, cfg.rateFF, cfg.deadband, cfg.smooth, cfg.maxRate, cfg.accTau, cfg.dlpf,
         cfg.autoBias, cfg.bootGyro, cfg.nod, cfg.trimP, cfg.trimR, cfg.dirP, cfg.dirR, cfg.swapServo, cfg.usDegP,
         cfg.usDegR, cfg.limP, cfg.limR, cfg.lvlP, cfg.lvlR, ax, cfg.telHz, cfg.ledOn, cfg.startMode, cfg.name, cfg.calOK,
         strcmp(cfg.pin, DEFAULT_PIN) == 0 ? 1 : 0, MODE_NAMES[mode], cfg.ffBody, cfg.pred, cfg.srvDelay, cfg.srvTau,
-        cfg.accTauW, cfg.dbComp, cfg.srvDb, (unsigned)cfg.pwmHz, cfg.gait, cfg.soft, cfg.srvAcc, cfg.limPUsDn, cfg.limPUsUp, cfg.twinP, cfg.twinR);
+        cfg.accTauW, cfg.dbComp, cfg.srvDb, (unsigned)cfg.pwmHz, cfg.gait, cfg.soft, cfg.srvAcc, cfg.limPUsDn, cfg.limPUsUp, cfg.twinP, cfg.twinR, (unsigned)cfg.ditherUs);
 }
 void sendStatus(uint8_t dest) {
   sendf(dest,
@@ -2428,7 +2445,7 @@ void sendHelp(uint8_t dest) {
     "HELP GET | STATUS | EVLOG | PING | HELLO",
     "HELP SET <kunci> <nilai>   (pitch roll kp gain ff db smooth maxrate acctau dlpf autobias bootgyro nod",
     "HELP     trimp trimr dirp dirr swap usdegp usdegr limp limr lvlp lvlr axes tel led startmode",
-    "HELP     ffb pred sdelay stau sdb dbcomp acctauw pwmhz gait soft srvacc limpdn limpup twinp twinr)",
+    "HELP     ffb pred sdelay stau sdb dbcomp acctauw pwmhz gait soft srvacc limpdn limpup twinp twinr dither)",
     "HELP MODE stab|center|manual|off   MAN <atas-bawah> <kanan-kiri>   LIMP down|up (batas = posisi Manual sekarang)",
     "HELP CAL gyro | CAL level [atas-bawah|x] [kanan-kiri|x] | CAL twin | CAL abort",
     "HELP ACC | ACC off <x> <y> <z> | ACC gain <x> <y> <z> | ACC reset",
@@ -2497,6 +2514,7 @@ bool setParam(const char *key, const char *val, char *err, size_t errLen) {
   F_("lvlp", lvlP, -30.0f, 30.0f)
   F_("lvlr", lvlR, -30.0f, 30.0f)
   I_("tel", telHz, 0, 25)
+  I_("dither", ditherUs, 0, 20)
   I_("led", ledOn, 0, 1)
   I_("startmode", startMode, 0, 3)
 #undef F_
